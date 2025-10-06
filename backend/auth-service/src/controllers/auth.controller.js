@@ -169,15 +169,21 @@ export async function refresh(req, res) {
 
 export async function profile(req, res) {
   try {
-    const user = await User.findByPk(req.user.id, {
-      attributes: ['userId', 'email', 'name', 'phone', 'dob', 'gender', 'roleId']
-    });
+     res.setHeader('Cache-Control', 'no-store');
+    const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     // Fetch role
     const role = await Role.findByPk(user.roleId);
 
-    return res.json({ ...user.toJSON(), role: role ? role.role : null });
+    // Flatten education object if present
+    let userJson = user.toJSON();
+    if (userJson.education && typeof userJson.education === 'object') {
+      userJson = { ...userJson, ...userJson.education };
+      delete userJson.education;
+    }
+
+    return res.json({ ...userJson, role: role ? role.role : null });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -208,16 +214,22 @@ export async function updateEducation(req, res) {
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Update user education details
     const { yearOfEducation, yearOfStudy, programInterested } = req.body;
+
+    // Update both root fields and education object
+    user.yearOfEducation = yearOfEducation ?? user.yearOfEducation;
+    user.yearOfStudy = yearOfStudy ?? user.yearOfStudy;
+    user.programInterested = programInterested ?? user.programInterested;
+
     user.education = {
-      yearOfEducation: yearOfEducation || user.yearOfEducation,
-      yearOfStudy: yearOfStudy || user.yearOfStudy,
-      programInterested: programInterested || user.programInterested
+      ...user.education,
+      yearOfEducation: yearOfEducation ?? user.education?.yearOfEducation,
+      yearOfStudy: yearOfStudy ?? user.education?.yearOfStudy,
+      programInterested: programInterested ?? user.education?.programInterested
     };
 
     await user.save();
-    return res.status(200).json({ user , message: 'Educational details updated successfully' });
+    return res.status(200).json({ user, message: 'Educational details updated successfully' });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -229,16 +241,22 @@ export async function updateOrgClgBranch(req, res) {
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Update user organization/college/branch details
     const { orgId, collegeId, branchId } = req.body;
+
+    // Update both root fields and education object
+    user.orgId = orgId ?? user.orgId;
+    user.collegeId = collegeId ?? user.collegeId;
+    user.branchId = branchId ?? user.branchId;
+
     user.education = {
-      orgId: orgId || user.orgId,
-      collegeId: collegeId || user.collegeId,
-      branchId: branchId || user.branchId
+      ...user.education,
+      orgId: orgId ?? user.education?.orgId,
+      collegeId: collegeId ?? user.education?.collegeId,
+      branchId: branchId ?? user.education?.branchId
     };
 
     await user.save();
-    return res.status(200).json({ user , message: 'Educational details updated successfully' });
+    return res.status(200).json({ user, message: 'Org/College/Branch details updated successfully' });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

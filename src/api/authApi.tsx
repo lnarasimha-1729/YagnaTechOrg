@@ -1,5 +1,3 @@
-
-
 import axiosInstance from "./axiosInstance";
 
 // Define TypeScript interfaces
@@ -87,6 +85,16 @@ export interface ChangePasswordData {
   newPassword: string;
 }
 
+// Add these interfaces
+export interface ForgotPasswordData {
+  email: string;
+}
+
+export interface ResetPasswordData {
+  token: string;
+  newPassword: string;
+}
+
 // API functions with proper typing and corrected endpoints
 export const login = async (data: LoginCredentials) => {
   const res = await axiosInstance.post<LoginResponse>("/auth/login", data);
@@ -119,3 +127,10 @@ export const logout = () =>
 // ✅ ADD: Refresh token endpoint
 export const refreshToken = () =>
   axiosInstance.post<LoginResponse>("/auth/refresh");
+
+// Add these functions
+export const forgotPassword = (data: ForgotPasswordData) =>
+  axiosInstance.post("/auth/forgot-password", data);
+
+export const resetPassword = (data: ResetPasswordData) =>
+  axiosInstance.post("/auth/reset-password", data);

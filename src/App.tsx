@@ -24,6 +24,7 @@ import ProgramDetailPage from "./pages/ProgramDetailPage";
 import PreAssessmentPage from "./pages/PreAssessmentPage";
 import AdminDashboard from "./pages/Admin/AdminDashboard";
 import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
 
 const queryClient = new QueryClient({
   defaultOptions: {

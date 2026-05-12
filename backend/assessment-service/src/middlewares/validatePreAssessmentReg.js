@@ -1,0 +1,70 @@
+import {
+  GENDERS,
+  PROGRAMS,
+} from "../utils/preAssessmentConstants.js";
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_REGEX = /^[0-9+\-\s()]{7,20}$/;
+
+// Pre-flight validator for the registration POST. Multer has already parsed
+// multipart fields by the time this runs, so all values arrive as strings.
+export default function validatePreAssessmentReg(req, res, next) {
+  const errors = {};
+  const body = req.body || {};
+
+  const fullName = (body.fullName || "").trim();
+  if (!fullName) errors.fullName = "Full name is required";
+  else if (fullName.length < 2 || fullName.length > 120)
+    errors.fullName = "Full name must be between 2 and 120 characters";
+
+  const email = (body.email || "").trim().toLowerCase();
+  if (!email) errors.email = "Email is required";
+  else if (!EMAIL_REGEX.test(email)) errors.email = "Invalid email format";
+
+  const phoneNumber = (body.phoneNumber || "").trim();
+  if (!phoneNumber) errors.phoneNumber = "Phone number is required";
+  else if (!PHONE_REGEX.test(phoneNumber))
+    errors.phoneNumber = "Phone number must be 7-20 digits";
+
+  const gender = (body.gender || "").trim();
+  if (!gender) errors.gender = "Gender is required";
+  else if (!GENDERS.includes(gender))
+    errors.gender = `Gender must be one of: ${GENDERS.join(", ")}`;
+
+  const selectedProgram = (body.selectedProgram || "").trim();
+  if (!selectedProgram) errors.selectedProgram = "Program selection is required";
+  else if (!PROGRAMS.includes(selectedProgram))
+    errors.selectedProgram = `Program must be one of: ${PROGRAMS.join(", ")}`;
+
+  // Checkboxes serialise as strings ("true"/"false") through multipart forms.
+  const declarationRaw = body.declarationAccepted;
+  const declarationAccepted =
+    declarationRaw === true ||
+    declarationRaw === "true" ||
+    declarationRaw === "1" ||
+    declarationRaw === "on";
+  if (!declarationAccepted)
+    errors.declarationAccepted = "You must accept the declaration to continue";
+
+  if (!req.file)
+    errors.collegeProof = "College ID / proof file is required";
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(400).json({
+      message: "Validation failed",
+      errors,
+    });
+  }
+
+  // Hand sanitised values to the controller so it doesn't re-trim everywhere.
+  req.validatedBody = {
+    fullName,
+    email,
+    phoneNumber,
+    gender,
+    selectedProgram,
+    declarationAccepted,
+  };
+
+  next();
+}

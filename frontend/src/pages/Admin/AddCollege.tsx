@@ -1,10 +1,12 @@
 import React, { useState } from "react";
+import { addCollege } from "../../api/collegeApi";
 
 interface AddCollegeProps {
   onClose: () => void;
+  onSuccess?: () => void;
 }
 
-const AddCollege: React.FC<AddCollegeProps> = ({ onClose }) => {
+const AddCollege: React.FC<AddCollegeProps> = ({ onClose, onSuccess }) => {
   const [form, setForm] = useState({
     name: "",
     location: "",
@@ -13,14 +15,35 @@ const AddCollege: React.FC<AddCollegeProps> = ({ onClose }) => {
     students: "1563",
     description: "",
   });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Submit logic here
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await addCollege({
+        clgName: form.name.trim(),
+        clgAddress: form.location.trim(),
+      });
+      onSuccess?.();
+      onClose();
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Failed to add college";
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -116,11 +139,17 @@ const AddCollege: React.FC<AddCollegeProps> = ({ onClose }) => {
               className="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#219A85]"
             />
           </div>
+          {error && (
+            <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              {error}
+            </div>
+          )}
           <button
             type="submit"
-            className="bg-[#219A85] hover:bg-[#177385] text-white font-semibold px-6 py-2 rounded-lg transition-colors mt-4"
+            disabled={submitting}
+            className="bg-[#219A85] hover:bg-[#177385] disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold px-6 py-2 rounded-lg transition-colors mt-4"
           >
-            Add College
+            {submitting ? "Adding..." : "Add College"}
           </button>
         </form>
       </div>

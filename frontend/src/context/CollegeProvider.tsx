@@ -68,8 +68,9 @@ export const CollegeProvider = ({ children }: { children: ReactNode }) => {
     setLoading(false);
   }, []);
 
-  // Kick off the load once, on mount. Lazy + idempotent: if the fetch fails
-  // it doesn't keep retrying forever, but a consumer can call refresh().
+  // /college/all is public, so kick the load on mount. Lazy + idempotent:
+  // if the fetch fails it doesn't keep retrying forever, but a consumer
+  // can call refresh().
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;

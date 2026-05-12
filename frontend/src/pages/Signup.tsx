@@ -53,8 +53,8 @@ const Signup = () => {
       return;
     }
 
-    if (formData.password.length < 6) {
-      setApiError("Password must be at least 6 characters long.");
+    if (formData.password.length < 8) {
+      setApiError("Password must be at least 8 characters long.");
       return;
     }
 
@@ -88,8 +88,14 @@ const Signup = () => {
       }, 2000);
     } catch (err: unknown) {
       if (typeof err === "object" && err !== null && "response" in err) {
-        const errorObj = err as { response?: { data?: { error?: string } } };
-        setApiError(errorObj.response?.data?.error || "Signup failed");
+        const errorObj = err as { response?: { data?: { error?: string; message?: string } } };
+        setApiError(
+          errorObj.response?.data?.error ||
+          errorObj.response?.data?.message ||
+          "Signup failed"
+        );
+      } else if (err instanceof Error) {
+        setApiError(err.message);
       } else {
         setApiError("Signup failed");
       }

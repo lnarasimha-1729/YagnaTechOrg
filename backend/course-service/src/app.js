@@ -4,16 +4,11 @@ import helmet from 'helmet';
 import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import { Sequelize } from 'sequelize';
 import sequelize from './db/index.js';
 import cookieParser from "cookie-parser";
 import courseRoutes from './routes/course.routes.js';
 import enrollRoutes from './routes/enroll.routes.js';
-
-
-
-import dotenv from 'dotenv';
-
-dotenv.config()
 
 const app = express();
 
@@ -40,6 +35,16 @@ app.use('/', courseRoutes);
 app.use('/enroll', enrollRoutes);
 
 export async function initDb() {
+  // Connect without a database name so we can CREATE DATABASE IF NOT EXISTS
+  const bootstrap = new Sequelize('', process.env.DB_USER, process.env.DB_PASS, {
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT) || 3306,
+    dialect: 'mysql',
+    logging: false,
+  });
+  await bootstrap.query(`CREATE DATABASE IF NOT EXISTS \`${process.env.DB_NAME}\``);
+  await bootstrap.close();
+
   await sequelize.authenticate();
   await sequelize.sync();
   console.log('🗄️  Database connected and synced---');

@@ -6,10 +6,14 @@ import { AssessmentContext } from "../context/AssessmentContext";
 import { useNavigate } from "react-router-dom"
 import { getProfile } from "@/api/authApi"
 import { getCourseProgressSummary } from "@/api/course/courseApi"
+import { toast } from "react-toastify"
+import PreAssessmentOnboardingModal from "@/components/programs/PreAssessmentOnboardingModal"
+import { getMyPreAssessmentRegistration } from "@/api/preAssessmentRegistrationApi"
 
 
 const Assesments = () => {
   const { assessments, loading } = useContext(AssessmentContext) || {};
+  const navigate = useNavigate();
 
   const [profile, setProfile] = React.useState(null);
   const [loadingProfile, setLoadingProfile] = React.useState(true);
@@ -18,6 +22,11 @@ const Assesments = () => {
   // Track whether the course-progress fetch has resolved so we don't briefly
   // paint "Locked - Complete Course First" before the real status arrives.
   const [loadingCourseProgress, setLoadingCourseProgress] = React.useState(true);
+  // Onboarding modal state. `existingRegistration` is null while we're still
+  // checking and resolves to the registration object (or null) afterwards;
+  // when present we skip the modal and go straight to /preassessment.
+  const [onboardingOpen, setOnboardingOpen] = React.useState(false);
+  const [existingRegistration, setExistingRegistration] = React.useState(undefined);
 
   React.useEffect(() => {
     async function fetchProfile() {
@@ -50,11 +59,45 @@ const Assesments = () => {
     return () => { cancelled = true; };
   }, []);
 
+  // Probe for an existing pre-assessment registration so a returning student
+  // doesn't have to refill the onboarding form. We treat any error as "no
+  // registration yet" — the submit endpoint will still 409 on duplicates.
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await getMyPreAssessmentRegistration();
+        if (cancelled) return;
+        setExistingRegistration(res?.data?.data ?? null);
+      } catch {
+        if (!cancelled) setExistingRegistration(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleStartPreAssessment = () => {
+    // If the user has already onboarded once, skip straight to the assessment
+    // page — the modal exists to *register*, not to gate every retake.
+    if (existingRegistration) {
+      navigate("/preassessment");
+      return;
+    }
+    setOnboardingOpen(true);
+  };
+
+  const handleOnboardingSuccess = () => {
+    setOnboardingOpen(false);
+    toast.success("Registration successful! Redirecting to your pre-assessment…", {
+      autoClose: 2000,
+    });
+    // Slight delay so the toast is visible before the route swap.
+    setTimeout(() => navigate("/preassessment"), 600);
+  };
+
   // Find pre and post assessment for the current user
   const preAssessment = assessments?.find(a => a.type === "pre" && a.setId && a.setId.toLowerCase().includes("ai"));
   const postAssessment = assessments?.find(a => a.type === "post" && a.setId && a.setId.toLowerCase().includes("ai"));
-
-  const navigate = useNavigate()
 
   const isPreCompleted = profile?.preScore >= 60;
   const isRetakeAllowed = profile?.preScore < 60 && profile?.preScore !== null;
@@ -122,7 +165,7 @@ const Assesments = () => {
                 </li>
               </ul>
               {/* Hold the button until the profile (and therefore preScore) has
-                  loaded. Otherwise it briefly paints "Start Pre-Assessment" before
+                  loaded. Otherwise it briefly paints "Register for Pre-Assessment" before
                   flipping to "Completed" — confusing for returning students. */}
               {loadingProfile ? (
                 <Button
@@ -135,19 +178,21 @@ const Assesments = () => {
               ) : (
                 <>
                   <Button
-                    onClick={() => navigate("/preassessment")}
+                    onClick={handleStartPreAssessment}
                     className={`w-full rounded-lg transition-colors
     ${isPreCompleted
                         ? "bg-gray-300 text-gray-600 cursor-not-allowed"
                         : "bg-[#177385] text-white hover:bg-[#135f6e]"
                       }`}
-                    disabled={isPreCompleted}
+                    disabled={isPreCompleted || existingRegistration === undefined}
                   >
                     {isPreCompleted
                       ? "Completed"
                       : isRetakeAllowed
                         ? "Retake Pre-Assessment"
-                        : "Start Pre-Assessment"}
+                        : existingRegistration
+                          ? "Start Pre-Assessment"
+                          : "Register for Pre-Assessment"}
                   </Button>
                   {isPreCompleted && (
                     <p className="mt-3 text-center text-sm font-medium text-green-700">
@@ -234,6 +279,18 @@ const Assesments = () => {
           </Card>
         </div>
       </div>
+
+      <PreAssessmentOnboardingModal
+        open={onboardingOpen}
+        onOpenChange={setOnboardingOpen}
+        defaultValues={{
+          fullName: profile?.name || "",
+          email: profile?.email || "",
+          phoneNumber: profile?.phone || "",
+          gender: profile?.gender || "",
+        }}
+        onSuccess={handleOnboardingSuccess}
+      />
     </section>
   );
 };

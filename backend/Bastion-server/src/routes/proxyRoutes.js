@@ -28,6 +28,10 @@ Object.entries(serviceMap).forEach(([name, service]) => {
   // const target = `https://${service.host}:${service.port}`;
   const proxy = httpProxy(target, {
     preserveHostHdr: true,
+    // Default proxy body limit is 1mb — too small for legitimate file uploads
+    // (e.g. college ID proofs in pre-assessment registration). Match the
+    // upstream's own multer cap so the proxy isn't the bottleneck.
+    limit: '20mb',
     proxyReqPathResolver: (req) => {
       const stripped = req.originalUrl.replace(`/api/v1/${service.path}`, '') || '/';
       return service.forwardPrefix ? `${service.forwardPrefix}${stripped === '/' ? '' : stripped}` : stripped;

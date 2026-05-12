@@ -81,10 +81,21 @@ const MENU = [
             },
         ],
     },
+    {
+        key: 'colleges',
+        label: 'Colleges',
+        icon: ICONS.college,
+        children: [
+            { label: 'Manage Colleges', to: '/admin/colleges' },
+            { label: 'Add New College', to: '/admin/colleges/create' },
+        ],
+    },
 ];
 
 function isGroupActive(group, pathname) {
-    if (group.to && pathname.startsWith(group.to)) return true;
+    // Use boundary-aware match so /admin/college doesn't claim /admin/colleges
+    // (and vice versa). Exact match OR `to` followed by a `/` segment.
+    if (group.to && (pathname === group.to || pathname.startsWith(group.to + '/'))) return true;
     if (group.children) return group.children.some((c) => isGroupActive(c, pathname));
     if (group.key === 'course') {
         return pathname.startsWith('/admin/course');

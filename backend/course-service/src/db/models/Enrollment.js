@@ -10,10 +10,8 @@ const Enrollment = sequelize.define('Enrollment', {
   userId: {
     type: DataTypes.STRING,
     allowNull: false,
-    references: {
-      model: 'users', 
-      key: 'userId'
-    }
+    // No DB-level FK — users table lives in a separate database (auth-service).
+    // Referential integrity is enforced at the application layer.
   },
   courseId: {
     type: DataTypes.STRING,

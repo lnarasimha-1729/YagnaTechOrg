@@ -141,7 +141,7 @@ const PreAssessmentPage = () => {
                 disabled={profileLoading || starting}
                 className="px-8 py-3 text-lg rounded-xl bg-[#177385] text-white hover:bg-[#135f6e] transition-all shadow-md disabled:opacity-60"
               >
-                {profileLoading ? "Loading…" : starting ? "Starting…" : "Start Assessment"}
+                {profileLoading ? "Loading…" : starting ? "Starting…" : "Go To Assessment"}
               </Button>
             </div>
           </CardContent>

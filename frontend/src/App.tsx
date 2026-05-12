@@ -28,6 +28,9 @@ import CoursePlayer from "./pages/CoursePlayer";
 import ProgramDetailPage from "./pages/ProgramDetailPage";
 import PreAssessmentPage from "./pages/PreAssessmentPage";
 import AdminDashboard from "./pages/Admin/AdminDashboard";
+import AdminCollegeIndex from "./admin/pages/college/Index";
+import AdminCollegeCreate from "./admin/pages/college/Create";
+import AdminCollegeEdit from "./admin/pages/college/Edit";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import AssessmentDetails from "./pages/PreAssessment";
@@ -136,6 +139,9 @@ const App = () => (
               <Route path="admins" element={<AdminListIndex />} />
               <Route path="admins/create" element={<AdminCreate />} />
               <Route path="admins/edit/:id" element={<AdminEditPage />} />
+              <Route path="colleges" element={<AdminCollegeIndex />} />
+              <Route path="colleges/create" element={<AdminCollegeCreate />} />
+              <Route path="colleges/edit/:id" element={<AdminCollegeEdit />} />
             </Route>
 
             {/* Certificate builder — full screen, no admin chrome (mirrors admin/certificate/builder.blade.php) */}

@@ -7,7 +7,9 @@ const router = Router();
 
 // Branch management
 router.post("/add", isLoggedIn, authRoles(["admin"]), controller.addBranch);
-router.get("/all", isLoggedIn, authRoles(["admin", "user", "student", "instructor"]), controller.getAllBranches);
+// Public — paired with /all above so the profile-page dropdowns can load
+// branches without needing the cross-service auth cookie.
+router.get("/all", controller.getAllBranches);
 router.put("/update/:branchId", isLoggedIn, authRoles(["admin"]), controller.updateBranch);
 router.delete("/delete/:branchId", isLoggedIn, authRoles(["admin"]), controller.deleteBranch);
 

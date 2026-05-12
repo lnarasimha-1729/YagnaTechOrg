@@ -16,6 +16,7 @@ const liveClassRoutes = require('./routes/liveclass.routes');
 const couponRoutes = require('./routes/coupon.routes');
 const certificateRoutes = require('./routes/certificate.routes');
 const collegeDashboardRoutes = require('./routes/collegeDashboard.routes');
+const collegeRoutes = require('./routes/college.routes');
 const studentRoutes = require('./routes/student.routes');
 const preAssessmentRoutes = require('./routes/preassessment.routes');
 
@@ -136,6 +137,7 @@ app.use('/api/admin', adminOnly, liveClassRoutes);
 app.use('/api/admin', adminOnly, couponRoutes);
 app.use('/api/admin', adminOnly, certificateRoutes);
 app.use('/api/admin', adminOnly, collegeDashboardRoutes);
+app.use('/api/admin', adminOnly, collegeRoutes);
 app.use('/api/admin', adminOnly, studentRoutes);
 
 // Public certificate routes — unauthenticated. Mirror the player flow which

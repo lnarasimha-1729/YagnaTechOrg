@@ -30,7 +30,15 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
-app.use(express.json({ limit: '10mb' }));
+// Skip JSON parsing for multipart bodies — those requests need to stream
+// untouched to the upstream service (e.g. assessment-service file uploads).
+// Otherwise express.json() reads the raw body and 413s on the file payload
+// before the proxy ever sees the request.
+app.use((req, res, next) => {
+  const ct = req.headers['content-type'] || '';
+  if (ct.startsWith('multipart/form-data')) return next();
+  return express.json({ limit: '10mb' })(req, res, next);
+});
 app.use(morgan('combined'));
 app.use(rateLimiter);
 

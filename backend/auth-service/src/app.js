@@ -114,13 +114,11 @@ import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import sequelize from './db/index.js';
+import Role from './db/models/Role.js';
 import authRoutes from './routes/auth.routes.js';
 import roleRoutes from './routes/roles.routes.js';
 import cookieParser from "cookie-parser";
-
-import dotenv from 'dotenv';
-
-dotenv.config();
+import { generateRoleID } from './utils/uidGeneration.js';
 
 const app = express();
 
@@ -146,9 +144,21 @@ app.get("/", (req, res) => {
 app.use('/', authRoutes);
 app.use('/roles', roleRoutes);
 
+const ROLES = ['student', 'instructor', 'admin', 'auditor'];
+
 export async function initDb() {
   await sequelize.authenticate();
   await sequelize.sync();
+
+  // Ensure every role row exists — safe to run on every boot.
+  for (const roleName of ROLES) {
+    const [, created] = await Role.findOrCreate({
+      where: { role: roleName },
+      defaults: { roleId: generateRoleID('R'), role: roleName },
+    });
+    if (created) console.log(`  ✅ Seeded role: ${roleName}`);
+  }
+
   console.log('🗄️  Database connected and synced---');
 }
 

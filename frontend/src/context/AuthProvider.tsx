@@ -174,7 +174,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const loginUser = async (credentials: LoginCredentials) => {
     try {
       setLoading(true);
-      await login(credentials);
+      const loginRes = await login(credentials);
+
+      // Persist the access token so axiosInstance's request interceptor can
+      // attach it as a Bearer header on subsequent calls. Without this, only
+      // the httpOnly cookie carries auth — which works for auth-service but
+      // fails for cross-service routes (e.g. college-service /college/all)
+      // where Bastion-forwarded cookies don't make it through, producing 401s
+      // for the dropdowns on the profile page.
+      const accessToken = loginRes.data?.accessToken;
+      if (accessToken) localStorage.setItem("accessToken", accessToken);
+      const refreshToken = loginRes.data?.refreshToken;
+      if (refreshToken) localStorage.setItem("refreshToken", refreshToken);
 
       // After auth-service login, fetch full profile
       const profileRes = await getProfile();
@@ -226,6 +237,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } finally {
       setUser(null);
       localStorage.removeItem("userId");
+      localStorage.removeItem("accessToken");
+      localStorage.removeItem("refreshToken");
       setLoading(false);
     }
   };

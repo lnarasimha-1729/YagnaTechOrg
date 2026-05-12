@@ -38,17 +38,49 @@ const Login = () => {
     //   1. auth-service (lucy_devdb.users) — students + admins that signed up via the public form.
     //   2. admin-service (lms_admin.users) — admins created by root via the Add New Admin page.
     //
-    // We try auth-service first so students stay on their normal path. If it
-    // rejects (admin-only account that was never mirrored to auth-service), we
-    // fall back to admin-service. Both paths converge on a clean redirect.
+    // Old behaviour was to try auth-service first, then fall back to admin-service.
+    // For root admins (admin-service-only) that meant *every* login waited for an
+    // auth-service 401 round-trip before the real call fired. Visible as
+    // noticeably slower admin login vs student login.
+    //
+    // Now we fire both in parallel and use whichever succeeds. The losing call's
+    // failure is silently ignored. Students see no extra latency (auth-service
+    // answers first or admin-service silently 401s in the background); admins
+    // are no longer gated on auth-service's rejection.
+    const authPromise = loginUser({ email, password }).then(
+      (user) => ({ kind: 'auth' as const, user }),
+      (err) => Promise.reject({ kind: 'auth' as const, err })
+    );
+    const adminPromise = adminLogin(email, password).then(
+      (bridge) => ({ kind: 'admin' as const, bridge }),
+      (err) => Promise.reject({ kind: 'admin' as const, err })
+    );
 
+    let winner:
+      | { kind: 'auth'; user: Awaited<ReturnType<typeof loginUser>> }
+      | { kind: 'admin'; bridge: Awaited<ReturnType<typeof adminLogin>> }
+      | null = null;
     let authError: unknown = null;
-    try {
-      const loggedInUser = await loginUser({ email, password });
+    let adminError: unknown = null;
 
-      // Auth-service accepted. If this user is an admin, also bridge-login to
-      // admin-service so admin pages have a token. Bridge failure is non-fatal
-      // (college admins only exist in auth-service).
+    try {
+      // Promise.any resolves with the first fulfilled value; if both reject it
+      // throws an AggregateError we surface below.
+      winner = await Promise.any([authPromise, adminPromise]);
+    } catch (aggErr) {
+      const errs = (aggErr as AggregateError).errors || [];
+      for (const e of errs) {
+        if (e?.kind === 'auth') authError = e.err;
+        if (e?.kind === 'admin') adminError = e.err;
+      }
+    }
+
+    if (winner?.kind === 'auth') {
+      const loggedInUser = winner.user;
+
+      // The race might have lost on the admin side — but if this user is an
+      // admin we still need a valid admin_token for /admin/* pages. Try the
+      // admin bridge in the background; non-fatal if it fails.
       let bridgedAdmin: { college_id?: string | null; is_root_admin?: boolean } | null = null;
       if (loggedInUser.role === "admin") {
         try {
@@ -56,8 +88,6 @@ const Login = () => {
           bridgedAdmin = bridge?.user || null;
         } catch (bridgeErr) {
           console.warn("[Login] admin-service bridge failed (college admin?):", bridgeErr);
-          // Non-fatal — college admins are auth-service-only
-          // Store auth-service user as admin_user for AdminLayout detection
           if (loggedInUser.collegeId) {
             localStorage.setItem("admin_user", JSON.stringify({
               college_id: loggedInUser.collegeId,
@@ -72,37 +102,24 @@ const Login = () => {
         }
       }
 
-      // Routing rule: only the root admin lands on the regular dashboard.
-      // Every other admin (college-bound or auth-service-bridged) lands on
-      // the College Dashboard. is_root_admin comes from admin-service /auth/login;
-      // when the bridge fails (auth-service-only admin), that account by
-      // definition is not root, so the fallback to false is safe.
       const isRootAdmin = bridgedAdmin?.is_root_admin === true;
       const adminLandingPath = isRootAdmin ? "/admin/dashboard" : "/admin/college";
       navigate(loggedInUser.role === "admin" ? adminLandingPath : "/dashboard", { replace: true });
       return;
-    } catch (err) {
-      authError = err;
     }
 
-    // auth-service rejected. Try admin-service directly — covers admins that
-    // root created via the Add New Admin page (no auth-service mirror).
-    try {
-      const bridge = await adminLogin(email, password);
+    if (winner?.kind === 'admin') {
       const adminUser: { college_id?: string | null; role?: string; is_root_admin?: boolean } =
-        bridge?.user || {};
-      // Same rule as the auth-service path: only the root admin (id=1 in
-      // admin-service, exposed as is_root_admin in the login response) lands
-      // on the regular dashboard. Every other admin lands on /admin/college.
+        winner.bridge?.user || {};
       const landing = adminUser.is_root_admin ? "/admin/dashboard" : "/admin/college";
       navigate(landing, { replace: true });
       return;
-    } catch (adminErr) {
-      console.error("[Login] both auth-service and admin-service rejected:", { authError, adminErr });
     }
 
-    // Both rejected — surface the most useful message.
-    const errAny = authError as { response?: { data?: { message?: string; error?: string } } } | undefined;
+    // Both rejected — surface the most useful message. Prefer auth-service's
+    // error since the majority of users come through that path.
+    console.error("[Login] both auth-service and admin-service rejected:", { authError, adminError });
+    const errAny = (authError ?? adminError) as { response?: { data?: { message?: string; error?: string } } } | undefined;
     setApiError(
       errAny?.response?.data?.message ||
       errAny?.response?.data?.error ||

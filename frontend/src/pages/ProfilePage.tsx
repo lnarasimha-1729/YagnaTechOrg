@@ -30,7 +30,19 @@ interface ProfileFormData {
 
 const ProfilePage = () => {
   const { user, loading, checkAuth } = useAuth();
-  const { colleges, branches } = useContext(CollegeContext) || { colleges: [], branches: [] };
+  const collegeCtx = useContext(CollegeContext);
+  const { colleges, branches, refresh: refreshColleges } = collegeCtx || { colleges: [], branches: [] };
+
+  // CollegeProvider caches the colleges/branches list at the app root and only
+  // fetches once on mount. So when an admin deletes a college on another tab
+  // (or in another browser session) the profile dropdown keeps the stale row
+  // until full page reload. Refresh every time the profile page mounts so the
+  // dropdown always reflects current DB state.
+  useEffect(() => {
+    refreshColleges?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [formData, setFormData] = useState<ProfileFormData>({
     email: "",
     name: "",
@@ -333,28 +345,34 @@ const ProfilePage = () => {
                   matches student.collegeId against admin.college_id, so a
                   free-text college name would never aggregate correctly. */}
               <select
-                value={formData.college}
+                value={
+                  // If the saved college no longer exists in the DB (admin
+                  // deleted it), don't render the orphan id — show the
+                  // "Select your college" placeholder so the user picks a
+                  // valid current option.
+                  formData.college && colleges.some((c) => c.clgId === formData.college)
+                    ? formData.college
+                    : ''
+                }
                 onChange={(e) => handleInputChange('college', e.target.value)}
                 disabled={!isEditing}
                 className="w-full border rounded px-2 py-2 bg-white disabled:bg-gray-50 disabled:text-gray-700"
               >
-                <option value="">-- Select your college --</option>
+                <option value="">Select your college</option>
                 {colleges.map((c) => (
                   <option key={c.clgId} value={c.clgId}>
                     {c.clgName} ({c.clgId})
                   </option>
                 ))}
-                {/* If the saved value isn't in the list (legacy free-text data),
-                    keep it visible so the student knows what was there before
-                    they had to pick a real one. */}
-                {formData.college &&
-                  !colleges.some((c) => c.clgId === formData.college) && (
-                    <option value={formData.college}>
-                      {formData.college} (not in list — please reselect)
-                    </option>
-                  )}
               </select>
-              {isEditing && colleges.length === 0 && (
+              {isEditing &&
+                formData.college &&
+                !colleges.some((c) => c.clgId === formData.college) && (
+                  <p className="text-xs text-amber-700">
+                    Your previous college is no longer available. Please pick a new one.
+                  </p>
+                )}
+              {isEditing && colleges.length === 0 && !formData.college && (
                 <p className="text-xs text-amber-700">
                   No colleges loaded. Ask the admin to add your college first.
                 </p>

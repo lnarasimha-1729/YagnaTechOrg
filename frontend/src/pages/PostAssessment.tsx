@@ -51,12 +51,13 @@ export default function PostAssessment() {
   if (!assessment || !assessment.questions) return;
 
   const totalQuestions = assessment.questions.length;
-  const totalScore = assessment.score;
+  const totalScore = assessment.score || 100;
 
   let correctCount = 0;
 
   assessment.questions.forEach((q) => {
-    if (answers[q.quesId] === q.correctAns) correctCount++;
+    // answers stores the option text value; correctAns is the key (e.g. "option2")
+    if (answers[q.quesId] === q.options[q.correctAns]) correctCount++;
   });
 
   const marksPerQuestion = totalScore / totalQuestions;
@@ -151,9 +152,17 @@ export default function PostAssessment() {
     <section className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-3xl mx-auto bg-white shadow-lg rounded-xl p-6">
 
-        {/* ⏳ TIMER */}
-        <div className={`text-right text-md font-bold mb-6 ${timeLeft > 300 ? "text-black" : "text-red-600"}`}>
-          ⏳ {formatTime(timeLeft)}
+        {/* HEADER INFO */}
+        <div className="flex justify-between items-center mb-4">
+          <div className="text-sm text-gray-600 font-medium">
+            Total Marks: <span className="text-[#177385] font-bold">100</span>
+            &nbsp;|&nbsp; Questions: <span className="text-[#177385] font-bold">{questions.length}</span>
+            &nbsp;|&nbsp; Marks per Question: <span className="text-[#177385] font-bold">5</span>
+          </div>
+          {/* ⏳ TIMER */}
+          <div className={`text-md font-bold ${timeLeft > 300 ? "text-black" : "text-red-600"}`}>
+            ⏳ {formatTime(timeLeft)}
+          </div>
         </div>
 
         {/* QUESTIONS */}
@@ -167,15 +176,20 @@ export default function PostAssessment() {
                   <p className="text-lg font-semibold text-gray-800">
                     {index + 1}. {q.question}
                   </p>
-                  <span
-                    className={`px-2 py-1 text-xs rounded-full ${
-                      q.questionSeverity === "easy" ? "bg-green-100 text-green-700" :
-                      q.questionSeverity === "medium" ? "bg-yellow-100 text-yellow-700" :
-                      "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {q.questionSeverity}
-                  </span>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 font-medium">
+                      5 Marks
+                    </span>
+                    <span
+                      className={`px-2 py-1 text-xs rounded-full ${
+                        q.questionSeverity === "easy" ? "bg-green-100 text-green-700" :
+                        q.questionSeverity === "medium" ? "bg-yellow-100 text-yellow-700" :
+                        "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {q.questionSeverity}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="space-y-2">

@@ -431,14 +431,18 @@ async function seedPreAssessment() {
       type: 'pre',
       setId: PRE_ASSESSMENT_SET_ID,
       timer: PRE_ASSESSMENT_TIMER,
+      score: 100,
       status: 'available',
     },
   });
 
-  // Fix timer if wrong
-  if (assessment.timer !== PRE_ASSESSMENT_TIMER) {
-    await assessment.update({ timer: PRE_ASSESSMENT_TIMER });
-    console.log(`  ✅ Assessment A1 timer updated to ${PRE_ASSESSMENT_TIMER} s (30 min)`);
+  // Fix timer or score if wrong
+  const preUpdates = {};
+  if (assessment.timer !== PRE_ASSESSMENT_TIMER) preUpdates.timer = PRE_ASSESSMENT_TIMER;
+  if (assessment.score !== 100) preUpdates.score = 100;
+  if (Object.keys(preUpdates).length) {
+    await assessment.update(preUpdates);
+    console.log(`  ✅ Assessment A1 updated:`, preUpdates);
   }
 
   // 3. Update the QuestionSet that A1 actually uses (may differ from PRE_ASSESSMENT_SET_ID
@@ -481,14 +485,18 @@ async function seedPostAssessment() {
       type: 'post',
       setId: POST_ASSESSMENT_SET_ID,
       timer: POST_ASSESSMENT_TIMER,
+      score: 100,
       status: 'available',
     },
   });
 
-  // Fix timer if wrong
-  if (assessment.timer !== POST_ASSESSMENT_TIMER) {
-    await assessment.update({ timer: POST_ASSESSMENT_TIMER });
-    console.log(`  ✅ Assessment A2 timer updated to ${POST_ASSESSMENT_TIMER} s (45 min)`);
+  // Fix timer or score if wrong
+  const postUpdates = {};
+  if (assessment.timer !== POST_ASSESSMENT_TIMER) postUpdates.timer = POST_ASSESSMENT_TIMER;
+  if (assessment.score !== 100) postUpdates.score = 100;
+  if (Object.keys(postUpdates).length) {
+    await assessment.update(postUpdates);
+    console.log(`  ✅ Assessment A2 updated:`, postUpdates);
   }
 
   // 3. Update the QuestionSet that A2 actually uses

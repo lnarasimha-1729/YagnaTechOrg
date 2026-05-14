@@ -35,6 +35,16 @@ app.get('/api/public/categories', async (_req, res, next) => {
     try { res.json(await categoryService.list()); } catch (e) { next(e); }
 });
 
+// Public colleges list — used by the student profile dropdown.
+// Admin creates colleges in this same DB so this is the single source of truth.
+const collegeService = require('./services/CollegeService');
+app.get('/api/public/colleges', async (_req, res, next) => {
+    try {
+        const { colleges } = await collegeService.list({ per_page: 1000 });
+        res.json(colleges);
+    } catch (e) { next(e); }
+});
+
 // Course content endpoints — real DB first, mock fallback
 const courseContentCtrl = require('./course-content/CourseController');
 const playerCtrl = require('./course-content/PlayerController');

@@ -38,33 +38,39 @@ export const CollegeProvider = ({ children }: { children: ReactNode }) => {
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    let lastErr: unknown = null;
+    let lastCollegeErr: unknown = null;
+
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        const [collegesRes, branchesRes] = await Promise.all([
-          axiosInstance.get<College[]>("/college/all"),
-          axiosInstance.get<Branch[]>("/college/branch/all"),
-        ]);
+        const collegesRes = await axiosInstance.get<College[]>("/admin/public/colleges");
         setColleges(Array.isArray(collegesRes.data) ? collegesRes.data : []);
-        setBranches(Array.isArray(branchesRes.data) ? branchesRes.data : []);
-        setLoading(false);
-        return;
+        lastCollegeErr = null;
+        break;
       } catch (err) {
-        lastErr = err;
+        lastCollegeErr = err;
         if (attempt < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS);
       }
     }
-    // Both attempts failed — record a friendly summary and stop quietly.
-    const status =
-      typeof lastErr === "object" && lastErr && "response" in lastErr
-        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (lastErr as any).response?.status
-        : null;
-    setError(
-      status === 503
-        ? "College service is unavailable. Start backend/college-service and retry."
-        : "Failed to load colleges. Check your network and retry."
-    );
+
+    // Branches are fetched independently — a downed college-service won't
+    // block the colleges dropdown from populating.
+    try {
+      const branchesRes = await axiosInstance.get<Branch[]>("/college/branch/all");
+      setBranches(Array.isArray(branchesRes.data) ? branchesRes.data : []);
+    } catch {
+      // branches failure is non-fatal; colleges dropdown still works
+      setBranches([]);
+    }
+
+    if (lastCollegeErr !== null) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const status = (lastCollegeErr as any)?.response?.status ?? null;
+      setError(
+        status === 503
+          ? "College service is unavailable. Start backend/college-service and retry."
+          : "Failed to load colleges. Check your network and retry."
+      );
+    }
     setLoading(false);
   }, []);
 

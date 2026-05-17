@@ -12,4 +12,9 @@ const findByQuizAndUser = (quiz_id, user_id) =>
 
 const destroyByQuiz = (quiz_id) => QuizSubmission.destroy({ where: { quiz_id } });
 
-module.exports = { findById, findByQuiz, findByQuizAndUser, destroyByQuiz };
+const create = (data) => QuizSubmission.create(data);
+
+const countByQuizAndUser = (quiz_id, user_id) =>
+    QuizSubmission.count({ where: { quiz_id, user_id } });
+
+module.exports = { findById, findByQuiz, findByQuizAndUser, destroyByQuiz, create, countByQuizAndUser };

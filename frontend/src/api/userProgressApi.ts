@@ -43,12 +43,17 @@ export const getUserProgress = async () => {
   return r.data as { rows: UserProgressRow[]; target: ProgressTarget | null };
 };
 
-export const selectProgram = (programId: number, courseId?: number) =>
+export const selectProgram = (
+  programId: number,
+  courseId?: number,
+  programName?: string,
+) =>
   client
     .post("/user-progress/select-program", {
       user_id: requireUser(),
       program_id: programId,
       course_id: courseId ?? null,
+      program_name: programName ?? null,
     })
     .then((r) => r.data as { row: UserProgressRow; target: ProgressTarget | null });
 

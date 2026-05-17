@@ -150,7 +150,14 @@ function LessonRenderer({ lesson, course, onLessonEnded, onTimeUpdate }) {
     }
 
     if (t === 'quiz') {
-        return <QuizPlayer lesson={lesson} />;
+        // Reuse onLessonEnded so a submitted quiz ticks in the sidebar via
+        // the same completeLesson path the video player uses. The `key` is
+        // essential: without it, navigating between two quiz lessons keeps
+        // the same component instance and leaks answers/submitted state
+        // from the previous quiz, which made a stray Submit click record
+        // the previous quiz's submission shape against the new quiz id.
+        // Keying by lesson.id forces a clean unmount/remount per quiz.
+        return <QuizPlayer key={lesson.id} lesson={lesson} onCompleted={onLessonEnded} />;
     }
 
     if (t === 'iframe' || t === 'scorm') {

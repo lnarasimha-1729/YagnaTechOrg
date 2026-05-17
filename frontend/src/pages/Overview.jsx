@@ -50,11 +50,19 @@ const [loadingProfile, setLoadingProfile] = useState(true);
     }
   }, [location.state, user]);
 
-  // Fetch top courses and categorize them
+  // Fetch top courses and categorize them. Always scope the call to the
+  // student's collegeId so we never render a course the student isn't
+  // entitled to. If profile has no college yet the API responds with
+  // `no_college: true` and an empty list, which the UI treats as "set
+  // your college in Profile".
   useEffect(() => {
     const fetchPrograms = async () => {
       try {
-        const res = await axios.get(`${ADMIN_BASE}/api/public/courses`);
+        const profileRes = await getProfile();
+        const clgId = profileRes?.data?.collegeId || '';
+        const res = await axios.get(`${ADMIN_BASE}/api/public/courses`, {
+          params: { clgId },
+        });
         const courses = Array.isArray(res.data?.data) ? res.data.data : [];
         setActivePrograms(courses.filter(c => Number(c.total_enrollment) > 0 && c.status === "active"));
         setCompletedPrograms(courses.filter(c => Number(c.total_enrollment) > 0 && c.status === "completed"));

@@ -68,21 +68,48 @@ const User = sequelize.define('User', {
   assessmentId: { 
     type: DataTypes.STRING
   },
-  programInterested: { 
-    type: DataTypes.STRING 
+  programInterested: {
+    type: DataTypes.STRING
+  },
+  // === Instructor-specific profile fields (all optional, null for non-instructors)
+  expertise: {
+    type: DataTypes.STRING(255),
+    allowNull: true
+  },
+  bio: {
+    type: DataTypes.STRING(1000),
+    allowNull: true
+  },
+  yearsOfExperience: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
+  linkedinUrl: {
+    type: DataTypes.STRING(255),
+    allowNull: true
   },
   profileStatus: { 
     type: DataTypes.ENUM('active', 'inactive', 'pending'), 
     defaultValue: 'pending' 
   },
-  location: { 
-    type: DataTypes.STRING 
+  location: {
+    type: DataTypes.STRING
+  },
+  address: {
+    type: DataTypes.STRING(255),
+    allowNull: true
   },
   lastLogin: { 
     type: DataTypes.DATE 
   },
   preScore: {
     type : DataTypes.INTEGER
+  },
+  // Seconds the student spent on the pre-assessment (timer start → submit).
+  // Lives alongside preScore in the student schema.
+  preScoreDuration: {
+    type : DataTypes.INTEGER,
+    allowNull: true
   },
   postScore: {
     type : INTEGER

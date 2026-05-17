@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import RoadMap from "@/assets/RM.png"; // Adjust the path as necessary
@@ -22,7 +24,54 @@ import {
   FaPlayCircle, FaGraduationCap, FaClipboardCheck, FaCertificate
 } from "react-icons/fa";
 
+const ADMIN_BASE =
+  (import.meta.env.VITE_ADMIN_API_URL as string) || "http://localhost:4000";
+
+interface HomeCategory {
+  id: number;
+  title: string;
+  description: string;
+  // keywords is a comma-separated string in the admin model; we split it into
+  // the card's bullet list so what an admin types under a category shows here.
+  bullets: string[];
+}
+
 const Home = () => {
+  // "Opportunities for Students" cards. Previously a hardcoded 3-item array
+  // ("AI Frontier Program", etc.); now driven by the categories an admin
+  // creates. This is a public, pre-login page so we call /api/public/categories
+  // without a clgId — the backend returns the full category tree in that mode.
+  const [programCategories, setProgramCategories] = useState<HomeCategory[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await axios.get(`${ADMIN_BASE}/api/public/categories`, {
+          timeout: 30000,
+        });
+        if (cancelled) return;
+        const cats = Array.isArray(data?.categories) ? data.categories : [];
+        setProgramCategories(
+          cats.map((c: any) => ({
+            id: Number(c.id),
+            title: String(c.title || ""),
+            description: String(c.description || ""),
+            bullets: String(c.keywords || "")
+              .split(",")
+              .map((s: string) => s.trim())
+              .filter(Boolean),
+          })),
+        );
+      } catch {
+        // Network/API failure: leave the list empty. The section renders an
+        // empty-state line rather than stale hardcoded programs.
+        if (!cancelled) setProgramCategories([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const features = [
     {
       icon: BookOpen,
@@ -328,96 +377,25 @@ const Home = () => {
             </p> */}
           </div>
 
+          {programCategories.length === 0 && (
+            <p className="text-center text-muted-foreground">
+              No programs available yet.
+            </p>
+          )}
+
           <div className="roadmapt grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {[
-              {
-                icon: Globe, // Changed from BookOpen to Globe
-                title: "AI Frontier Program",
-                description:
-                  "Kickstart your AI career with industry-ready knowledge in neural networks and deep learning.",
-                points: [
-                  {
-                    icon: CheckCircle,
-                    text: "AI expert devised curriculum ",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Live program delivered by industry experts",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Project-based learning approach",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Continuous mentor guidance",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "6 months virtual comprehensive program",
-                  },
-                ],
-              },
-              {
-                icon: GraduationCap,
-                title: "AI Frontier Plus Program",
-                description:
-                  "Hybrid learning with corporate experience component",
-                points: [
-                  {
-                    icon: CheckCircle,
-                    text: "All the benefits of AI Frontier Program ",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "2 months of hands-on corporate experience",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Personalized guidance with industry experts",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Fast-track your career with advanced skills",
-                  },
-                ],
-              },
-              {
-                icon: Building2, // Changed from Award to Building2
-                title: "Elite AI Residency",
-                description:
-                  "Full-time corporate experience for advanced learners",
-                points: [
-                  {
-                    icon: CheckCircle,
-                    text: "All the benefits of AI Frontier Program",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "6 months on-site corporate engagement",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Full time real project responsibilities",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Work alongside corporate employees",
-                  },
-                  {
-                    icon: CheckCircle,
-                    text: "Fast paced learning experience",
-                  },
-                ],
-              },
-            ].map((action, index) => (
+            {programCategories.map((action, index) => {
+              // Cycle the three original lucide icons so cards keep their
+              // visual variety regardless of how many categories an admin adds.
+              const Icon = [Globe, GraduationCap, Building2][index % 3];
+              return (
               <Card
-                key={index}
+                key={action.id}
                 className="card-ngo border-0 flex flex-col h-full border-2 border-warm-green rounded-xl"
               >
                 <CardHeader className="text-center space-y-4">
                   <div className="w-12 h-12 bg-gradient-hero rounded-lg flex items-center justify-center mx-auto">
-                    <action.icon className="w-6 h-6 text-white" />
+                    <Icon className="w-6 h-6 text-white" />
                   </div>
                   <CardTitle className="text-lg">{action.title}</CardTitle>
                 </CardHeader>
@@ -426,11 +404,11 @@ const Home = () => {
                     {action.description}
                   </CardDescription>
                   <div className="flex flex-col items-start space-y-3 mb-4">
-                    {action.points.map((point, idx) => (
+                    {action.bullets.map((text, idx) => (
                       <div key={idx} className="flex items-center space-x-2">
-                        <point.icon className="w-5 h-5 text-warm-green" />
+                        <CheckCircle className="w-5 h-5 text-warm-green" />
                         <span className="text-muted-foreground">
-                          {point.text}
+                          {text}
                         </span>
                       </div>
                     ))}
@@ -448,7 +426,8 @@ const Home = () => {
                   </div>
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>

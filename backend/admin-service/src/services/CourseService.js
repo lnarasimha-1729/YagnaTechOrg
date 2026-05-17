@@ -325,6 +325,9 @@ const remove = async (id) => {
     const course = await courseRepo.findById(id);
     if (!course) throw new HttpError(404, 'Course not found');
 
+    // Order matters: sections.course_id and lessons.section_id both have FKs
+    // back to courses/sections. We delete children first so the parent
+    // destroy doesn't trip ER_ROW_IS_REFERENCED_2.
     const lessons = await Lesson.findAll({ where: { course_id: id } });
     for (const lesson of lessons) {
         removeFile(lesson.lesson_src);
@@ -335,6 +338,9 @@ const remove = async (id) => {
         }
         await lesson.destroy();
     }
+
+    // Sections must be removed before the course row itself.
+    await Section.destroy({ where: { course_id: id } });
 
     removeFile(course.thumbnail);
     removeFile(course.banner);

@@ -108,7 +108,7 @@ export default function CourseDetails({ slug: slugProp } = {}) {
                                     </div>
                                 )}
                                 <div className="flex items-center gap-2">
-                                    {course.review_count > 0 ? (
+                                    {course.average_rating > 0 ? (
                                         <>
                                             <span>{course.average_rating.toFixed(1)}</span>
                                             {Array.from({ length: 5 }).map((_, i) => (

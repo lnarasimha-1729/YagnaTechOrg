@@ -29,6 +29,10 @@ module.exports = (sequelize) => {
         outcomes: { type: DataTypes.TEXT },
         faqs: { type: DataTypes.TEXT },
         instructor_ids: { type: DataTypes.TEXT },
+        // Array of clgIds (college-service primary key strings) the course is
+        // offered at. No FK because colleges live in lucy_devdb, not lms_admin.
+        // Validated at the service layer against college-service.
+        clg_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
         average_rating: { type: DataTypes.FLOAT, defaultValue: 0 },
         expiry_period: { type: DataTypes.INTEGER, allowNull: true },
     }, { tableName: 'courses', timestamps: true, createdAt: 'created_at', updatedAt: 'updated_at' });

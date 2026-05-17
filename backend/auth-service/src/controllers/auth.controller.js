@@ -289,14 +289,21 @@ export async function preScore(req, res) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const { preScore } = req.body;
+    const { preScore, preScoreDuration } = req.body;
 
     user.preScore = preScore;
+    // Time taken on the pre-assessment, in seconds. Optional & defensive:
+    // only persist a finite, non-negative value.
+    const dur = Number(preScoreDuration);
+    if (Number.isFinite(dur) && dur >= 0) {
+      user.preScoreDuration = Math.round(dur);
+    }
     await user.save();
 
     return res.status(200).json({
       message: "Pre-assessment score updated successfully",
       preScore: user.preScore,
+      preScoreDuration: user.preScoreDuration,
     });
 
   } catch (error) {

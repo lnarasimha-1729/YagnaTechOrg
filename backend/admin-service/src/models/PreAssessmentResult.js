@@ -9,6 +9,9 @@ module.exports = (sequelize) => {
         program_id: { type: DataTypes.INTEGER, allowNull: true },
         score: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
         passed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        // Seconds the student spent on the assessment (timer start → submit),
+        // sent by the frontend. Null for older rows submitted before tracking.
+        duration_seconds: { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'pre_assessment_results',
         timestamps: true,

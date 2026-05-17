@@ -381,6 +381,27 @@ All colors MUST be HSL.
 .player-shell { min-height: 100vh; background: #f8f9ff; }
 .player-container { max-width: 1400px; margin: 0 auto; padding: 0 1.25rem; }
 
+/* Player-scoped brand color: retarget the global `skin` utilities to the
+   player's teal (#1F8982) without disturbing the rest of the app (admin,
+   dashboard, etc. keep #169F48). */
+.player-shell .bg-skin,
+.player-shell .hover\:bg-skin:hover { background-color: #1F8982 !important; }
+.player-shell .bg-skin\/10 { background-color: rgba(31, 137, 130, 0.10) !important; }
+.player-shell .bg-skin\/20 { background-color: rgba(31, 137, 130, 0.20) !important; }
+.player-shell .bg-skin\/30 { background-color: rgba(31, 137, 130, 0.30) !important; }
+.player-shell .text-skin,
+.player-shell .hover\:text-skin:hover { color: #1F8982 !important; }
+.player-shell .border-skin,
+.player-shell .hover\:border-skin:hover,
+.player-shell .focus\:border-skin:focus { border-color: #1F8982 !important; }
+.player-shell .accent-skin { accent-color: #1F8982 !important; }
+/* Spinner border-t-transparent uses border-[#177385]; recolor too. */
+.player-shell .border-\[\#177385\] { border-color: #1F8982 !important; }
+/* ol-btn-primary inside the player (used by the "Mark as complete" /
+   quiz "Submit" buttons) — repaint to the teal too. */
+.player-shell .ol-btn-primary { background-color: #1F8982 !important; border-color: #1F8982 !important; }
+.player-shell .ol-btn-primary:hover { background-color: #186e68 !important; border-color: #186e68 !important; }
+
 .player-header { position: sticky; top: 0; z-index: 40; background: #212529; }
 .player-header-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem 0; }
 .player-header-title { color: #fff; font-size: 16px; font-weight: 500; line-height: 26px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

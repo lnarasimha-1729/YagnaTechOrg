@@ -11,16 +11,26 @@ import SeoTab from './tabs/SeoTab';
 import DripTab from './tabs/DripTab';
 import CurriculumTab from './tabs/CurriculumTab';
 import LiveClassTab from './tabs/LiveClassTab';
+import {
+    HiOutlinePencilSquare,
+    HiOutlineDocumentDuplicate,
+    HiOutlineDocumentText,
+    HiOutlineCurrencyDollar,
+    HiOutlineTag,
+    HiOutlinePhoto,
+    HiOutlineDocumentPlus,
+    HiOutlineAdjustmentsHorizontal,
+} from 'react-icons/hi2';
 
 const TABS = [
-    { key: 'curriculum', label: 'Curriculum', icon: 'fi-rr-menu-burger' },
-    { key: 'basic', label: 'Basic', icon: 'fi-rr-duplicate' },
-    { key: 'live-class', label: 'Live Class', icon: 'fi-rr-video-camera' },
-    { key: 'pricing', label: 'Pricing', icon: 'fi-rr-comment-dollar' },
-    { key: 'info', label: 'Info', icon: 'fi-rr-tags' },
-    { key: 'media', label: 'Media', icon: 'fi fi-rr-gallery' },
-    { key: 'seo', label: 'SEO', icon: 'fi-rr-note-medical' },
-    { key: 'drip-content', label: 'Drip Content', icon: 'fi-rr-settings-sliders' },
+    { key: 'curriculum', label: 'Curriculum', Icon: HiOutlinePencilSquare },
+    { key: 'basic', label: 'Basic', Icon: HiOutlineDocumentDuplicate },
+    { key: 'live-class', label: 'Live Class', Icon: HiOutlineDocumentText },
+    { key: 'pricing', label: 'Pricing', Icon: HiOutlineCurrencyDollar },
+    { key: 'info', label: 'Info', Icon: HiOutlineTag },
+    { key: 'media', label: 'Media', Icon: HiOutlinePhoto },
+    { key: 'seo', label: 'SEO', Icon: HiOutlineDocumentPlus },
+    { key: 'drip-content', label: 'Drip Content', Icon: HiOutlineAdjustmentsHorizontal },
 ];
 
 const PLAYER_BASE = '/courses/programs/course-details/play';
@@ -102,20 +112,36 @@ export default function CourseEdit() {
             <div className="ol-card">
                 <div className="ol-card-body p-20px">
                     <div className="flex flex-wrap md:flex-nowrap gap-3">
-                        {/* Sidebar */}
-                        <div className="ol-sidebar-tab w-full md:w-[200px]">
-                            <div className="flex flex-col">
-                                {TABS.map((t) => (
-                                    <button
-                                        key={t.key}
-                                        type="button"
-                                        className={`nav-link ${tab === t.key ? 'active' : ''}`}
-                                        onClick={() => setTab(t.key)}
-                                    >
-                                        <span className={t.icon} />
-                                        <span>{t.label}</span>
-                                    </button>
-                                ))}
+                        {/* Sidebar — pill-style nav with react-icons. Active tab is
+                            filled green with a white icon tile; inactive rows have a
+                            pale icon tile and gray label, separated by hair-line dividers. */}
+                        <div className="w-full md:w-[230px] flex-shrink-0">
+                            <div className="flex flex-col gap-1">
+                                {TABS.map((t, idx) => {
+                                    const active = tab === t.key;
+                                    const { Icon } = t;
+                                    return (
+                                        <button
+                                            key={t.key}
+                                            type="button"
+                                            onClick={() => setTab(t.key)}
+                                            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-colors ${
+                                                active
+                                                    ? 'bg-skin text-white font-semibold shadow-sm'
+                                                    : 'text-gray-600 hover:bg-gray-50'
+                                            } ${idx !== 0 && !active ? 'border-t border-gray-100' : ''}`}
+                                        >
+                                            <span
+                                                className={`w-6 h-6 flex items-center justify-center text-[18px] ${
+                                                    active ? 'text-white' : 'text-gray-400'
+                                                }`}
+                                            >
+                                                <Icon />
+                                            </span>
+                                            <span className="text-[14px]">{t.label}</span>
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
 

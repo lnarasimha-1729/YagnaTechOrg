@@ -28,6 +28,17 @@ export const getPlayer = (slug: string, lessonId?: number | string) =>
 export const completeLesson = (courseId: number, lessonId: number) =>
   api.post("/player/complete", { course_id: courseId, lesson_id: lessonId }).then((r) => r.data);
 
+// Persist a quiz attempt so the score/retry state survives page reloads.
+// quizId is the quiz lesson's id. Returns the authoritative attempts count.
+export const submitQuizAttempt = (
+  quizId: number,
+  score: number,
+  total: number,
+) =>
+  api
+    .post("/player/quiz-submit", { quiz_id: quizId, score, total })
+    .then((r) => r.data as { attempts_used: number; persisted: boolean });
+
 export type LessonProgressResult = {
   lesson_id: number;
   current_duration: number;

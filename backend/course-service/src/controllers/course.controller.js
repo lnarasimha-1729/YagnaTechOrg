@@ -1,30 +1,39 @@
 import Course from '../db/models/Course.js';
+import { validateCollegeIds, getCollegesByIds } from '../utils/collegeClient.js';
+import { validateAddCourse, validateUpdateCourse } from '../validators/course.validator.js';
 
 // Add a new course
 export const addCourse = async (req, res) => {
-  const { courseId, title, description, duration, isPreAssessmentNeeded, modules } = req.body;
-  if (!courseId || !title || !duration) {
-    return res.status(400).json({ error: 'Course ID, title, and duration are required' });
+  const parsed = validateAddCourse(req.body);
+  if (!parsed.ok) {
+    return res.status(400).json({ error: 'Validation failed', details: parsed.errors });
   }
+  const data = parsed.value;
 
-  // Check if course with the same ID already exists
-  const existingCourse = await Course.findByPk(courseId);
+  const existingCourse = await Course.findByPk(data.courseId);
   if (existingCourse) {
-    return res.status(400).json({ error: 'Course with this ID already exists' });
+    return res.status(409).json({ error: 'Course with this ID already exists' });
   }
 
   try {
-    const newCourse = await Course.create({
-      courseId,
-      title,
-      description,
-      duration,
-      isPreAssessmentNeeded,
-      modules
-    });
+    const { ok, unknown } = await validateCollegeIds(data.clgIds);
+    if (!ok) {
+      return res.status(400).json({
+        error: 'Unknown clgId(s) — not found in college-service',
+        unknown,
+      });
+    }
+  } catch (err) {
+    console.error('[course] college validation failed:', err.message);
+    return res.status(503).json({ error: 'College service unreachable; cannot validate clgIds' });
+  }
+
+  try {
+    const newCourse = await Course.create(data);
+    console.log(`[course] created ${data.courseId} for clgIds=${data.clgIds.join(',')}`);
     res.status(201).json(newCourse);
   } catch (error) {
-    console.error('Error adding course:', error);
+    console.error('[course] create failed:', error.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -48,9 +57,32 @@ export const getCourseById = async (req, res) => {
     if (!course) {
       return res.status(404).json({ error: 'Course not found' });
     }
-    res.status(200).json(course);
+    const colleges = await getCollegesByIds(course.clgIds || []);
+    res.status(200).json({ ...course.toJSON(), colleges });
   } catch (error) {
     console.error('Error fetching course:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Get all courses offered at a given college. Uses Sequelize's JSON_CONTAINS
+// helper for MySQL so we let the DB do the filtering instead of pulling every
+// row over the wire.
+export const getCoursesByCollege = async (req, res) => {
+  const { clgId } = req.params;
+  if (!clgId) {
+    return res.status(400).json({ error: 'clgId is required' });
+  }
+  try {
+    const { Sequelize } = await import('sequelize');
+    const courses = await Course.findAll({
+      where: Sequelize.literal(
+        `JSON_CONTAINS(clgIds, ${Course.sequelize.escape(JSON.stringify(clgId))})`
+      ),
+    });
+    res.status(200).json(courses);
+  } catch (error) {
+    console.error('Error fetching courses by college:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -58,22 +90,38 @@ export const getCourseById = async (req, res) => {
 // Update course
 export const updateCourse = async (req, res) => {
   const { courseId } = req.params;
-  const { title, description, duration, isPreAssessmentNeeded, modules } = req.body;
+  const parsed = validateUpdateCourse(req.body);
+  if (!parsed.ok) {
+    return res.status(400).json({ error: 'Validation failed', details: parsed.errors });
+  }
+  const patch = parsed.value;
+
   try {
     const course = await Course.findByPk(courseId);
     if (!course) {
       return res.status(404).json({ error: 'Course not found' });
     }
-    await course.update({
-      title,
-      description,
-      duration,
-      isPreAssessmentNeeded,
-      modules
-    });
+
+    if (patch.clgIds !== undefined) {
+      try {
+        const { ok, unknown } = await validateCollegeIds(patch.clgIds);
+        if (!ok) {
+          return res.status(400).json({
+            error: 'Unknown clgId(s) — not found in college-service',
+            unknown,
+          });
+        }
+      } catch (err) {
+        console.error('[course] college validation failed:', err.message);
+        return res.status(503).json({ error: 'College service unreachable; cannot validate clgIds' });
+      }
+    }
+
+    await course.update(patch);
+    console.log(`[course] updated ${courseId}; fields=${Object.keys(patch).join(',')}`);
     res.status(200).json(course);
   } catch (error) {
-    console.error('Error updating course:', error);
+    console.error('[course] update failed:', error.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 };

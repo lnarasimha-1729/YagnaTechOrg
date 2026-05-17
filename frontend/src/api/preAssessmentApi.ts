@@ -25,13 +25,19 @@ export type PreAssessmentStatus = {
   program_id: number | null;
   passed: boolean;
   score: number | null;
+  duration_seconds?: number | null;
   threshold: number;
 };
 
-export const submitPreAssessment = (score: number, programId?: number | null) =>
+export const submitPreAssessment = (
+  score: number,
+  programId?: number | null,
+  durationSeconds?: number | null,
+) =>
   client.post<PreAssessmentStatus>("/pre-assessment/submit", {
     score,
     program_id: programId ?? null,
+    duration_seconds: durationSeconds ?? null,
   }).then((r) => r.data);
 
 export const getPreAssessmentStatus = (programId: number | string) =>

@@ -130,6 +130,7 @@ export const updatePreScore = (data: {
   userId: string;
   assessmentId: string;
   preScore: number;
+  preScoreDuration?: number;
 }) => {
   return axiosInstance.put("/auth/profile/prescore", data);
 };

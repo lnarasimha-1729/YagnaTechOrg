@@ -14,6 +14,11 @@ export interface Course {
   duration: number;
   isPreAssessmentNeeded: boolean;
   modules: Module[];
+  clgIds: string[];
+  // Auth-service userId of the instructor assigned to teach this course.
+  // Optional/nullable: legacy courses created before instructor assignment
+  // existed have no value.
+  instructorId?: string | null;
 }
 
 export interface CourseContextType {

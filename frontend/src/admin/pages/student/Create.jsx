@@ -1,6 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import AdminForm from '../admin/AdminForm';
+import StudentForm from './StudentForm';
 import { createStudent } from '../../api/student';
 
 export default function StudentCreate() {
@@ -36,7 +36,7 @@ export default function StudentCreate() {
             <div className="ol-card p-4">
                 <h4 className="text-[16px] font-semibold text-dark mb-5">Student Info</h4>
                 <div className="ol-card-body">
-                    <AdminForm onSubmit={onSubmit} submitLabel="Create Student" />
+                    <StudentForm onSubmit={onSubmit} submitLabel="Create Student" />
                 </div>
             </div>
         </div>

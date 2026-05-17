@@ -18,7 +18,9 @@ const certificateRoutes = require('./routes/certificate.routes');
 const collegeDashboardRoutes = require('./routes/collegeDashboard.routes');
 const collegeRoutes = require('./routes/college.routes');
 const studentRoutes = require('./routes/student.routes');
+const instructorRoutes = require('./routes/instructor.routes');
 const preAssessmentRoutes = require('./routes/preassessment.routes');
+const languageRoutes = require('./routes/language.routes');
 
 const app = express();
 
@@ -31,8 +33,14 @@ app.get(['/api/health', '/health'], (_req, res) => res.json({ ok: true, service:
 
 // Public read-only endpoints — no auth required
 const categoryService = require('./services/CategoryService');
-app.get('/api/public/categories', async (_req, res, next) => {
-    try { res.json(await categoryService.list()); } catch (e) { next(e); }
+app.get('/api/public/categories', async (req, res, next) => {
+    try {
+        // Student-facing calls pass ?clgId=<their-college>. The presence of
+        // the param (even empty) switches the service into college-gated
+        // mode. Admin/internal callers that omit it still get the full tree.
+        const clgId = 'clgId' in req.query ? String(req.query.clgId ?? '') : undefined;
+        res.json(await categoryService.list(clgId));
+    } catch (e) { next(e); }
 });
 
 // Public colleges list — used by the student profile dropdown.
@@ -51,26 +59,42 @@ const playerCtrl = require('./course-content/PlayerController');
 const publicCourseService = require('./course-content/PublicCourseService');
 
 app.get('/api/public/courses', async (req, res, next) => {
+    // When the caller supplies a clgId (or explicitly *no* clgId) the response
+    // must reflect that scope honestly: returning the mock catalog as a
+    // fallback would leak unrelated courses across colleges. Only fall back
+    // to mock when no college filtering is in play (legacy callers that
+    // never sent clgId).
+    const collegeAware = 'clgId' in req.query;
     try {
         const real = await publicCourseService.list(req.query);
-        if (real?.data?.length) return res.json(real);
+        if (collegeAware || real?.data?.length) return res.json(real);
         return courseContentCtrl.list(req, res, next);
     } catch (e) {
-        console.warn('[public/courses] DB failed, falling back to mock:', e.message);
+        console.warn('[public/courses] DB failed:', e.message);
+        if (collegeAware) {
+            return res.status(503).json({ error: 'Course catalog unavailable' });
+        }
         return courseContentCtrl.list(req, res, next);
     }
 });
 
-app.get('/api/public/course/:slug', async (req, res, next) => {
+app.get('/api/public/course/:slug', async (req, res) => {
+    const clgId = typeof req.query.clgId === 'string' ? req.query.clgId.trim() : null;
     try {
         const real = req.params.slug === 'first'
             ? await publicCourseService.detailsFirstActive()
-            : await publicCourseService.detailsBySlug(req.params.slug);
+            : await publicCourseService.detailsBySlug(req.params.slug, clgId || null);
         if (real) return res.json(real);
-        return courseContentCtrl.details(req, res, next);
+        // Course-detail must always reflect real admin data. Previously this
+        // fell back to mockData (Mastering React 18, etc.) whenever the slug
+        // had no matching courses row, so the page showed hardcoded content.
+        // Return a clean 404 instead — never serve mock for course detail.
+        return res.status(404).json({ error: 'Course not found' });
     } catch (e) {
-        console.warn('[public/course] DB failed, falling back to mock:', e.message);
-        return courseContentCtrl.details(req, res, next);
+        console.warn('[public/course] DB failed:', e.message);
+        // No mock fallback here either — surface the failure honestly rather
+        // than masking it with hardcoded course data.
+        return res.status(503).json({ error: 'Course unavailable' });
     }
 });
 
@@ -87,6 +111,54 @@ app.get('/api/public/player/:slug', async (req, res, next) => {
 });
 app.post('/api/public/player/complete', playerCtrl.complete);
 app.post('/api/public/player/progress', playerCtrl.progress);
+
+// Persist one quiz attempt so re-entering the lesson restores the last score
+// and remaining-retry state. user_id comes from the x-user-id header (set by
+// the frontend course API interceptor) or the body, matching existing pattern.
+app.post('/api/public/player/quiz-submit', async (req, res) => {
+    try {
+        const user_id = req.headers['x-user-id'] || req.body.user_id;
+        const result = await publicCourseService.submitQuiz({ ...req.body, user_id });
+        return res.json(result);
+    } catch (e) {
+        console.warn('[public/player/quiz-submit] failed:', e.message);
+        return res.status(500).json({ error: 'Could not save quiz attempt' });
+    }
+});
+
+// Student-facing program request: the logged-in student sees a request an
+// admin sent them ("you are eligible for X") and accepts/rejects it. Student
+// identity via x-user-id header, matching the other /api/public endpoints.
+const studentSvc = require('./services/StudentService');
+app.get('/api/public/program-request', async (req, res) => {
+    try {
+        const userId = req.headers['x-user-id'] || req.query.user_id;
+        return res.json(await studentSvc.getStudentProgramRequest(userId));
+    } catch (e) {
+        console.warn('[public/program-request] failed:', e.message);
+        return res.status(500).json({ error: 'Could not load program request' });
+    }
+});
+app.get('/api/public/program-request/accepted', async (req, res) => {
+    try {
+        const userId = req.headers['x-user-id'] || req.query.user_id;
+        return res.json(await studentSvc.getAcceptedProgram(userId));
+    } catch (e) {
+        console.warn('[public/program-request/accepted] failed:', e.message);
+        return res.status(500).json({ error: 'Could not load accepted program' });
+    }
+});
+app.post('/api/public/program-request/respond', async (req, res) => {
+    try {
+        const userId = req.headers['x-user-id'] || req.body.user_id;
+        const result = await studentSvc.respondProgramRequest(userId, req.body.action);
+        return res.json(result);
+    } catch (e) {
+        const code = e.status || 500;
+        if (code === 500) console.warn('[public/program-request/respond] failed:', e.message);
+        return res.status(code).json({ error: e.message || 'Could not respond' });
+    }
+});
 
 // User progress / enrollment — public because student JWT lives in a cookie on a
 // different service; user_id is passed in body/query as the existing pattern.
@@ -149,6 +221,8 @@ app.use('/api/admin', adminOnly, certificateRoutes);
 app.use('/api/admin', adminOnly, collegeDashboardRoutes);
 app.use('/api/admin', adminOnly, collegeRoutes);
 app.use('/api/admin', adminOnly, studentRoutes);
+app.use('/api/admin', adminOnly, instructorRoutes);
+app.use('/api/admin', adminOnly, languageRoutes);
 
 // Public certificate routes — unauthenticated. Mirror the player flow which
 // also uses /api/public/* with an x-user-id header for student keying.
@@ -291,6 +365,39 @@ sequelize.authenticate()
             console.log(`watchStore hydrated: ${stats.histories} histories, ${stats.durations} durations`);
         } catch (e) {
             console.warn('watchStore hydrate failed:', e.message);
+        }
+
+        // Idempotently add instructor-specific columns to the auth-service
+        // users table when missing. The auth-service owns this schema, but
+        // adding the column from its own boot would require a redeploy of a
+        // second service — wedging it here keeps the instructor admin flow
+        // working in dev with just an admin-service restart. Safe to run on
+        // every startup (DESCRIBE first, ALTER only when absent).
+        try {
+            const authDb = require('./config/authDatabase');
+            const cols = await authDb.query('DESCRIBE users', { type: require('sequelize').QueryTypes.SELECT });
+            const hasInstructorPhoto = cols.some((c) => c.Field === 'instructorPhoto');
+            if (!hasInstructorPhoto) {
+                await authDb.query("ALTER TABLE users ADD COLUMN instructorPhoto VARCHAR(255) NULL");
+                console.log("🛠️  Added users.instructorPhoto column (auth DB)");
+            }
+            // studentPhoto: separate column so future student & instructor
+            // profile flows can't accidentally overwrite each other on a
+            // shared photo column. Same idempotent ALTER as above.
+            const hasStudentPhoto = cols.some((c) => c.Field === 'studentPhoto');
+            if (!hasStudentPhoto) {
+                await authDb.query("ALTER TABLE users ADD COLUMN studentPhoto VARCHAR(255) NULL");
+                console.log("🛠️  Added users.studentPhoto column (auth DB)");
+            }
+        } catch (e) {
+            console.warn('[auth-db] photo column check failed:', e.message);
+        }
+
+        try {
+            const { Language } = require('./models');
+            await Language.sync();
+        } catch (e) {
+            console.warn('[languages] table sync failed:', e.message);
         }
     })
     .then(start)

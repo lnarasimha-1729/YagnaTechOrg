@@ -16,8 +16,9 @@ const PreAssessmentResult = require('./PreAssessmentResult')(sequelize);
 const UserProgress = require('./UserProgress')(sequelize);
 const LessonCompletion = require('./LessonCompletion')(sequelize);
 const LessonWatchProgress = require('./LessonWatchProgress')(sequelize);
+const Language = require('./Language')(sequelize);
 
-const models = { Category, Course, SeoField, User, Lesson, Section, Question, QuizSubmission, Setting, LiveClass, Coupon, Certificate, PreAssessmentResult, UserProgress, LessonCompletion, LessonWatchProgress };
+const models = { Category, Course, SeoField, User, Lesson, Section, Question, QuizSubmission, Setting, LiveClass, Coupon, Certificate, PreAssessmentResult, UserProgress, LessonCompletion, LessonWatchProgress, Language };
 Object.values(models).forEach((m) => m.associate && m.associate(models));
 
 module.exports = { sequelize, ...models };

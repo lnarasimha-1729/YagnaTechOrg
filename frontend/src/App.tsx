@@ -53,9 +53,14 @@ import AdminCertificateBuilder from "./admin/pages/certificate/Builder";
 import CertificateDownloadPage from "./admin/pages/certificate/Download";
 import AdminStudentIndex from "./admin/pages/student/Index";
 import AdminStudentCreate from "./admin/pages/student/Create";
+import AdminStudentEdit from "./admin/pages/student/Edit";
+import AdminInstructorIndex from "./admin/pages/instructor/Index";
+import AdminInstructorCreate from "./admin/pages/instructor/Create";
+import AdminInstructorEdit from "./admin/pages/instructor/Edit";
 import AdminListIndex from "./admin/pages/admin/Index";
 import AdminCreate from "./admin/pages/admin/Create";
 import AdminEditPage from "./admin/pages/admin/Edit";
+import AdminManageLanguage from "./admin/pages/settings/ManageLanguage";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
@@ -136,12 +141,17 @@ const App = () => (
               <Route path="certificate" element={<AdminCertificateSettings />} />
               <Route path="students" element={<AdminStudentIndex />} />
               <Route path="students/create" element={<AdminStudentCreate />} />
+              <Route path="students/edit/:id" element={<AdminStudentEdit />} />
+              <Route path="instructors" element={<AdminInstructorIndex />} />
+              <Route path="instructors/create" element={<AdminInstructorCreate />} />
+              <Route path="instructors/edit/:id" element={<AdminInstructorEdit />} />
               <Route path="admins" element={<AdminListIndex />} />
               <Route path="admins/create" element={<AdminCreate />} />
               <Route path="admins/edit/:id" element={<AdminEditPage />} />
               <Route path="colleges" element={<AdminCollegeIndex />} />
               <Route path="colleges/create" element={<AdminCollegeCreate />} />
               <Route path="colleges/edit/:id" element={<AdminCollegeEdit />} />
+              <Route path="settings/languages" element={<AdminManageLanguage />} />
             </Route>
 
             {/* Certificate builder — full screen, no admin chrome (mirrors admin/certificate/builder.blade.php) */}

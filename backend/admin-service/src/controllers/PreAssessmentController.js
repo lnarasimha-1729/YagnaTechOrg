@@ -17,19 +17,31 @@ exports.submit = asyncHandler(async (req, res) => {
     const programId = req.body.program_id != null ? Number(req.body.program_id) : null;
     const passed = score >= PASS_THRESHOLD;
 
+    // Time the student spent on the assessment (timer start → submit), in
+    // seconds. Optional & defensive: ignore missing/invalid/negative values.
+    const rawDur = Number(req.body.duration_seconds);
+    const durationSeconds =
+        Number.isFinite(rawDur) && rawDur >= 0 ? Math.round(rawDur) : null;
+
     // Upsert: keep a single row per (user, program). Persist the most recent attempt.
     const where = { user_id: userId, program_id: programId };
     let row = await PreAssessmentResult.findOne({ where });
     if (row) {
-        await row.update({ score, passed });
+        await row.update({ score, passed, duration_seconds: durationSeconds });
     } else {
-        row = await PreAssessmentResult.create({ ...where, score, passed });
+        row = await PreAssessmentResult.create({
+            ...where,
+            score,
+            passed,
+            duration_seconds: durationSeconds,
+        });
     }
 
     return res.json({
         program_id: programId,
         score: row.score,
         passed: row.passed,
+        duration_seconds: row.duration_seconds,
         threshold: PASS_THRESHOLD,
     });
 });

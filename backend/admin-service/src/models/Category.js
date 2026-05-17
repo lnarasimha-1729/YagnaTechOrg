@@ -13,6 +13,10 @@ module.exports = (sequelize) => {
         description: { type: DataTypes.STRING(500) },
         thumbnail: { type: DataTypes.STRING(255) },
         category_logo: { type: DataTypes.STRING(255) },
+        // Array of clgIds (college-service primary key strings) this category
+        // is offered at. No FK because colleges live in lucy_devdb, not
+        // lms_admin. Mirrors courses.clg_ids.
+        clg_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
     }, { tableName: 'categories', timestamps: true, createdAt: 'created_at', updatedAt: 'updated_at' });
 
     Category.associate = (models) => {

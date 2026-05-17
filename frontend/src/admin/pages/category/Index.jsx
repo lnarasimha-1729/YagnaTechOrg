@@ -1,18 +1,68 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
 import { FaPen, FaTrash } from 'react-icons/fa';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import CategoryForm from './CategoryForm';
 import { listCategories, storeCategory, updateCategory, deleteCategory } from '../../api/category';
+import { useCollege } from '@/hooks/useCollege';
 
 const API = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:4000';
-const imgUrl = (p) => (p ? `${API}/${p}` : 'https://placehold.co/400x240?text=No+Image');
+
+// Max chips to show inline before collapsing the rest into a "+N more" pill.
+const MAX_VISIBLE_COLLEGES = 2;
+
+// Renders the colleges assigned to a category as chips. Resolves clgId ->
+// clgName via the colleges map; falls back to the raw id when a name is not
+// available (college deleted, or list still loading).
+function CollegeChips({ clgIds, nameById }) {
+    const ids = Array.isArray(clgIds) ? clgIds.filter(Boolean) : [];
+    if (ids.length === 0) {
+        return <span className="text-[11px] text-muted">No colleges assigned</span>;
+    }
+    const visible = ids.slice(0, MAX_VISIBLE_COLLEGES);
+    const hiddenCount = ids.length - visible.length;
+    const hiddenLabel = ids
+        .slice(MAX_VISIBLE_COLLEGES)
+        .map((id) => nameById[id] || id)
+        .join(', ');
+
+    return (
+        <div className="flex flex-wrap items-center gap-1">
+            {visible.map((id) => (
+                <span
+                    key={id}
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] max-w-[120px] truncate"
+                    title={nameById[id] || id}
+                >
+                    {nameById[id] || id}
+                </span>
+            ))}
+            {hiddenCount > 0 && (
+                <span
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px]"
+                    title={hiddenLabel}
+                >
+                    +{hiddenCount} more
+                </span>
+            )}
+        </div>
+    );
+}
 
 export default function CategoryIndex() {
     const [categories, setCategories] = useState([]);
     const [modal, setModal] = useState(null);
     const [confirm, setConfirm] = useState(null);
+    const { colleges } = useCollege();
+
+    const collegeNameById = useMemo(() => {
+        const map = {};
+        (colleges || []).forEach((c) => { map[c.clgId] = c.clgName; });
+        return map;
+    }, [colleges]);
+
+    const [collegeQuery, setCollegeQuery] = useState('');
 
     const load = async () => {
         const { categories } = await listCategories();
@@ -20,6 +70,21 @@ export default function CategoryIndex() {
     };
 
     useEffect(() => { load(); }, []);
+
+    // Filter categories by the colleges assigned to them. We match against
+    // both the resolved college name and the raw clgId so the admin can
+    // search either way. Empty query => show everything.
+    const filteredCategories = useMemo(() => {
+        const q = collegeQuery.trim().toLowerCase();
+        if (!q) return categories;
+        return categories.filter((cat) => {
+            const ids = Array.isArray(cat.clg_ids) ? cat.clg_ids : [];
+            return ids.some((id) => {
+                const name = collegeNameById[id] || '';
+                return id.toLowerCase().includes(q) || name.toLowerCase().includes(q);
+            });
+        });
+    }, [categories, collegeQuery, collegeNameById]);
 
     const handleStore = async (fd) => {
         try { await storeCategory(fd); toast.success('Category added successfully'); setModal(null); load(); }
@@ -43,21 +108,76 @@ export default function CategoryIndex() {
                     <div className="flex items-center justify-between flex-wrap gap-3">
                         <h4 className="text-[16px] font-semibold text-dark m-0 flex items-center gap-2">
                             <i className="fi-rr-settings-sliders" />
-                            All Category <span className="text-muted font-normal">({categories.length})</span>
+                            All Category{' '}
+                            <span className="text-muted font-normal">
+                                ({filteredCategories.length}
+                                {collegeQuery.trim() ? ` / ${categories.length}` : ''})
+                            </span>
                         </h4>
-                        <button className="ol-btn-outline-secondary flex items-center gap-10px" onClick={() => setModal({ type: 'create', parentId: null })}>
-                            <span className="fi-rr-plus" />
-                            <span>Add new category</span>
-                        </button>
+                        <div className="flex items-center gap-3 flex-wrap">
+                            <div className="relative">
+                                <input
+                                    type="text"
+                                    value={collegeQuery}
+                                    onChange={(e) => setCollegeQuery(e.target.value)}
+                                    placeholder="Filter by college…"
+                                    className="ol-form-control pr-7 min-w-[220px]"
+                                    aria-label="Filter categories by assigned college"
+                                />
+                                {collegeQuery && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setCollegeQuery('')}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray hover:text-danger text-[14px] leading-none"
+                                        title="Clear"
+                                        aria-label="Clear college filter"
+                                    >
+                                        ×
+                                    </button>
+                                )}
+                            </div>
+                            <button className="ol-btn-outline-secondary flex items-center gap-10px" onClick={() => setModal({ type: 'create', parentId: null })}>
+                                <span className="fi-rr-plus" />
+                                <span>Add new category</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
+            {filteredCategories.length === 0 && (
+                <div className="ol-card rounded-ol-8">
+                    <div className="ol-card-body py-10 px-6 text-center">
+                        <p className="text-[14px] text-gray m-0">
+                            {collegeQuery.trim()
+                                ? `No categories assigned to a college matching "${collegeQuery.trim()}".`
+                                : 'No categories yet.'}
+                        </p>
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {categories.map((cat) => (
+                {filteredCategories.map((cat) => (
                     <div key={cat.id} className="category-card ol-card rounded-ol-10 h-full">
-                        <img className="card-img-top" src={imgUrl(cat.thumbnail)} alt="" />
-                        <h6 className="text-[14px] font-semibold text-dark mb-12px flex items-center px-3 pt-3 m-0">
+                        {/* Fixed image area. The thumbnail is contained within
+                            this box (object-contain) so it never stretches the
+                            card; when absent we show a "No Image" placeholder
+                            occupying exactly the same space. */}
+                        <div className="w-full h-[180px] bg-gray-100 rounded-t-ol-10 flex items-center justify-center overflow-hidden">
+                            {cat.thumbnail ? (
+                                <img
+                                    className="max-w-full max-h-full object-contain"
+                                    src={`${API}/${cat.thumbnail}`}
+                                    alt={cat.title}
+                                />
+                            ) : (
+                                <span className="text-gray-400 text-2xl font-semibold select-none">
+                                    No Image
+                                </span>
+                            )}
+                        </div>
+                        <h6 className="text-[14px] font-semibold text-dark mb-2 flex items-center px-3 pt-3 m-0">
                             <i className={`${cat.icon} mr-1`} />
                             <span className="truncate">{cat.title}</span>
                             <span className="text-muted font-normal ml-2">({cat.childs?.length || 0})</span>
@@ -87,6 +207,11 @@ export default function CategoryIndex() {
                                 </button>
                             </span>
                         </h6>
+                        {/* Colleges assigned to this category. Collapses to
+                            "+N more" past MAX_VISIBLE_COLLEGES. */}
+                        <div className="px-3 pb-2">
+                            <CollegeChips clgIds={cat.clg_ids} nameById={collegeNameById} />
+                        </div>
                         <div className="ol-card-body py-0 px-0">
                             <ul className="divide-y divide-ebordermuted list-none m-0 p-0">
                                 {cat.childs?.map((ch) => (

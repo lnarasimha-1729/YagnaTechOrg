@@ -1,5 +1,16 @@
 const { UserProgress, Course, Lesson, Section } = require('../models');
 const { asyncHandler } = require('../middlewares/error');
+const { QueryTypes } = require('sequelize');
+const authDb = require('../config/authDatabase');
+
+// Programs the Enroll flow is allowed to persist onto users.assignedProgram.
+// Matches the enum the admin-side Send uses, so the column never holds
+// arbitrary strings even if a stale frontend sends something else.
+const ALLOWED_PROGRAM_NAMES = new Set([
+    'AI Frontier Program',
+    'AI Frontier Plus Program',
+    'Elite AI Residency',
+]);
 
 // All endpoints accept user_id in the body/query as a fallback because the
 // student JWT lives in an httpOnly cookie on a different service. When proper
@@ -58,6 +69,29 @@ exports.selectProgram = asyncHandler(async (req, res) => {
     } else {
         row = await UserProgress.create({ ...where, course_id: courseId, enrolled: false });
     }
+
+    // Persist the chosen program name onto the student schema so the user
+    // record self-describes which of the three program cards they enrolled
+    // through (the numeric IDs alone can't distinguish them — all three
+    // cards back the same course). Best-effort: bad/missing names are
+    // ignored without failing the enrollment.
+    const programName = typeof req.body.program_name === 'string'
+        ? req.body.program_name.trim()
+        : '';
+    if (programName && ALLOWED_PROGRAM_NAMES.has(programName)) {
+        try {
+            await authDb.query(
+                'UPDATE users SET assignedProgram = :programName WHERE userId = :userId',
+                {
+                    replacements: { programName, userId: String(userId) },
+                    type: QueryTypes.UPDATE,
+                }
+            );
+        } catch (e) {
+            console.warn('[select-program] failed to mirror assignedProgram:', e.message);
+        }
+    }
+
     res.json({ row, target: await buildPlayerTarget(row) });
 });
 

@@ -249,8 +249,8 @@ import {
 const tabs = [
   { value: "overview", label: "Overview", icon: BookOpen },
   { value: "assessments", label: "Assessments", icon: Clock },
-  { value: "courses", label: "My Programs", icon: GraduationCap },
-  
+  { value: "courses", label: "My Courses", icon: GraduationCap },
+
   { value: "certificates", label: "Certificates", icon: Trophy },
   { value: "profile", label: "Profile", icon: User },
   // { value: "payments", label: "Payments", icon: CreditCard },
@@ -470,7 +470,7 @@ const StudentDashboard = ({ contentOverride }: StudentDashboardProps = {}) => {
           </TabsContent>
 
           <TabsContent value="courses">
-            <SectionHeader title="My Programs" student={studentData} />
+            <SectionHeader title="My Courses" student={studentData} />
             <ProgramsPage />
           </TabsContent>
 

@@ -3,10 +3,20 @@ import { createPortal } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import { listStudents, deleteStudent } from '../../api/student';
+import { listStudents, deleteStudent, listStudentColleges, sendProgramRequest } from '../../api/student';
 import { BsThreeDotsVertical } from 'react-icons/bs';
 
 const API = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:4000';
+
+// Pre-assessment time taken: seconds → "Mm Ss" (or "Ss" under a minute).
+// Null/undefined means the duration wasn't recorded (older attempts).
+const fmtDuration = (secs) => {
+    if (secs == null || Number.isNaN(Number(secs))) return 'N/A';
+    const s = Math.max(0, Math.round(Number(secs)));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m > 0 ? `${m}m ${r}s` : `${r}s`;
+};
 
 const avatarUrl = (row) => row.photo
     ? `${API}/${row.photo}`
@@ -19,7 +29,10 @@ export default function StudentIndex() {
     const [error, setError] = useState(null);
     const [confirm, setConfirm] = useState(null);
 
-    const query = Object.fromEntries(params.entries());
+    // Show every student on one page (no pager rendered). A high per_page
+    // returns all signed-up students in a single request; search still works
+    // because the backend applies the filter before paginating.
+    const query = { per_page: 1000, ...Object.fromEntries(params.entries()) };
 
     const load = async () => {
         setLoading(true);
@@ -42,6 +55,15 @@ export default function StudentIndex() {
         const term = (fd.get('search') || '').toString().trim();
         const next = { ...query };
         if (term) next.search = term; else delete next.search;
+        setParams(next);
+    };
+
+    // College filter → URL param so it composes with search and survives
+    // reload. Empty value clears the filter.
+    const onCollegeFilter = (value) => {
+        const next = { ...query };
+        if (value) next.college = value; else delete next.college;
+        delete next.per_page; // keep URL clean; query default re-applies it
         setParams(next);
     };
 
@@ -106,10 +128,16 @@ export default function StudentIndex() {
             <div className="ol-card p-3">
                 <div className="ol-card-body">
                     <div className="grid grid-cols-12 gap-3 mb-3 mt-3 items-center">
-                        <div className="col-span-12 md:col-span-6">
+                        <div className="col-span-12 md:col-span-3">
                             <ExportDropdown onPdf={handlePrint} onPrint={handlePrint} />
                         </div>
-                        <div className="col-span-12 md:col-span-6">
+                        <div className="col-span-12 md:col-span-4">
+                            <CollegeFilter
+                                value={query.college || ''}
+                                onChange={onCollegeFilter}
+                            />
+                        </div>
+                        <div className="col-span-12 md:col-span-5">
                             <form onSubmit={onSearch} className="grid grid-cols-12 gap-3">
                                 <div className="col-span-12 md:col-span-9">
                                     <input
@@ -126,6 +154,21 @@ export default function StudentIndex() {
                             </form>
                         </div>
                     </div>
+                    {query.college && (
+                        <div className="mb-3">
+                            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-skin/10 text-skin text-[13px] font-medium">
+                                College: {query.college}
+                                <button
+                                    type="button"
+                                    className="text-skin hover:text-danger font-bold"
+                                    onClick={() => onCollegeFilter('')}
+                                    aria-label="Clear college filter"
+                                >
+                                    ×
+                                </button>
+                            </span>
+                        </div>
+                    )}
 
                     {isEmpty ? (
                         <div className="py-12 text-center border border-dashed border-border rounded-ol-8">
@@ -147,7 +190,10 @@ export default function StudentIndex() {
                                             <th scope="col">#</th>
                                             <th scope="col">Name</th>
                                             <th scope="col">Phone</th>
-                                            <th scope="col">Enrolled Course</th>
+                                            <th scope="col">College</th>
+                                            <th scope="col">Pre-Assessment</th>
+                                            <th scope="col">Program Request</th>
+                                            <th scope="col">Request Status</th>
                                             <th scope="col">Options</th>
                                         </tr>
                                     </thead>
@@ -169,7 +215,35 @@ export default function StudentIndex() {
                                                     </div>
                                                 </td>
                                                 <td><p className="m-0">{s.phone || '-'}</p></td>
-                                                <td>{s.enrolled_count || 0} Courses</td>
+                                                <td>
+                                                    <p className="m-0">{s.college || <span className="text-gray">Not selected</span>}</p>
+                                                </td>
+                                                <td className="min-w-[160px]">
+                                                    {s.pre_assessment ? (
+                                                        <div>
+                                                            <span
+                                                                className={`text-[13px] font-semibold ${
+                                                                    s.pre_assessment.passed
+                                                                        ? 'text-green-600'
+                                                                        : 'text-red-600'
+                                                                }`}
+                                                            >
+                                                                Score: {s.pre_assessment.score}
+                                                            </span>
+                                                            <p className="text-[11px] text-gray m-0 mt-1">
+                                                                Time taken: {fmtDuration(s.pre_assessment.duration_seconds)}
+                                                            </p>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[12px] text-gray">Not taken</span>
+                                                    )}
+                                                </td>
+                                                <td className="min-w-[260px]">
+                                                    <ProgramRequestCell student={s} />
+                                                </td>
+                                                <td>
+                                                    <RequestStatusBadge status={s.program_request_status} />
+                                                </td>
                                                 <td>
                                                     <StudentOptions
                                                         student={s}
@@ -193,6 +267,192 @@ export default function StudentIndex() {
                     onCancel={() => setConfirm(null)}
                     onConfirm={() => handleDelete(confirm.id)}
                 />
+            )}
+        </div>
+    );
+}
+
+const PROGRAM_OPTIONS = [
+    'AI Frontier Program',
+    'AI Frontier Plus Program',
+    'Elite AI Residency',
+];
+
+// Status of the program request an admin sent the student. Driven by
+// program_requests.status (joined into the student list as
+// program_request_status): sent → awaiting the student's response,
+// accepted/rejected → the student responded.
+function RequestStatusBadge({ status }) {
+    if (!status) {
+        return <span className="text-[12px] text-gray">No request</span>;
+    }
+    const map = {
+        sent: { label: 'Pending', cls: 'bg-amber-100 text-amber-700' },
+        accepted: { label: 'Accepted', cls: 'bg-green-100 text-green-700' },
+        rejected: { label: 'Rejected', cls: 'bg-red-100 text-red-700' },
+        cancelled: { label: 'Cancelled', cls: 'bg-gray-100 text-gray-600' },
+    };
+    const s = map[status] || { label: status, cls: 'bg-gray-100 text-gray-600' };
+    return (
+        <span className={`inline-block px-2 py-0.5 rounded text-[12px] font-semibold ${s.cls}`}>
+            {s.label}
+        </span>
+    );
+}
+
+// Per-student Program Request: pick one of the three programs and Send.
+// Prefills with the student's existing request (one-per-student upsert on
+// the backend), so resending shows the current selection.
+function ProgramRequestCell({ student }) {
+    const [program, setProgram] = useState(student.program_request || '');
+    const [sending, setSending] = useState(false);
+    const [sentProgram, setSentProgram] = useState(student.program_request || '');
+
+    const onSend = async () => {
+        if (!program || sending) return;
+        setSending(true);
+        try {
+            await sendProgramRequest(student.id, program);
+            setSentProgram(program);
+            toast.success(`Program request sent to ${student.name}`);
+        } catch (e) {
+            toast.error(e.response?.data?.error || 'Failed to send program request');
+        } finally {
+            setSending(false);
+        }
+    };
+
+    return (
+        <div className="flex items-center gap-2">
+            <select
+                className="ol-form-control text-[13px] min-w-[170px]"
+                value={program}
+                onChange={(e) => setProgram(e.target.value)}
+                disabled={sending}
+            >
+                <option value="">Select program</option>
+                {PROGRAM_OPTIONS.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                ))}
+            </select>
+            <button
+                type="button"
+                className="ol-btn-primary text-[13px] px-3 py-1 disabled:opacity-50"
+                onClick={onSend}
+                disabled={!program || sending}
+            >
+                {sending ? 'Sending…' : 'Send'}
+            </button>
+            {sentProgram && !sending && (
+                <span
+                    className="text-[11px] text-green-600 whitespace-nowrap"
+                    title={`Last sent: ${sentProgram}`}
+                >
+                    ✓ Sent
+                </span>
+            )}
+        </div>
+    );
+}
+
+// Searchable college dropdown: type to filter the list of colleges that
+// students actually belong to; selecting one filters the table. The chosen
+// value is driven by the parent (URL param) so it survives reload.
+function CollegeFilter({ value, onChange }) {
+    const [colleges, setColleges] = useState([]);
+    const [open, setOpen] = useState(false);
+    const [term, setTerm] = useState('');
+    const boxRef = useRef(null);
+
+    useEffect(() => {
+        let alive = true;
+        listStudentColleges()
+            .then((res) => { if (alive) setColleges(res.colleges || []); })
+            .catch(() => { /* dropdown just stays empty on failure */ });
+        return () => { alive = false; };
+    }, []);
+
+    useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+        const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+        document.addEventListener('mousedown', onDoc);
+        document.addEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('mousedown', onDoc);
+            document.removeEventListener('keydown', onKey);
+        };
+    }, [open]);
+
+    const filtered = term
+        ? colleges.filter((c) => c.toLowerCase().includes(term.toLowerCase()))
+        : colleges;
+
+    const pick = (c) => {
+        onChange(c);
+        setTerm('');
+        setOpen(false);
+    };
+
+    return (
+        <div className="relative" ref={boxRef}>
+            <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray pointer-events-none">
+                    <i className="fi-rr-search" />
+                </span>
+                <input
+                    className="ol-form-control w-full pl-9 pr-8"
+                    type="text"
+                    placeholder="Search college…"
+                    value={open ? term : (value || '')}
+                    onFocus={() => { setOpen(true); setTerm(''); }}
+                    onChange={(e) => { setTerm(e.target.value); setOpen(true); }}
+                />
+                {(value || (open && term)) && (
+                    <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray hover:text-danger font-bold px-1"
+                        aria-label="Clear college filter"
+                        onClick={() => { setTerm(''); onChange(''); setOpen(false); }}
+                    >
+                        ×
+                    </button>
+                )}
+            </div>
+            {open && (
+                <ul className="absolute left-0 right-0 z-30 mt-1 max-h-64 overflow-auto bg-white border border-border rounded-ol-8 shadow-lg py-1 text-[13px]">
+                    {term && (
+                        <li className="px-3 py-1 text-[11px] text-gray border-b border-border">
+                            {filtered.length} match{filtered.length === 1 ? '' : 'es'} for “{term}”
+                        </li>
+                    )}
+                    <li>
+                        <button
+                            type="button"
+                            className="w-full text-left px-3 py-2 text-gray hover:bg-gray-50"
+                            onClick={() => pick('')}
+                        >
+                            All colleges
+                        </button>
+                    </li>
+                    {filtered.length === 0 ? (
+                        <li className="px-3 py-2 text-gray">No colleges match</li>
+                    ) : (
+                        filtered.map((c) => (
+                            <li key={c}>
+                                <button
+                                    type="button"
+                                    className={`w-full text-left px-3 py-2 hover:bg-gray-50 ${
+                                        c === value ? 'text-skin font-semibold' : 'text-dark'
+                                    }`}
+                                    onClick={() => pick(c)}
+                                >
+                                    {c}
+                                </button>
+                            </li>
+                        ))
+                    )}
+                </ul>
             )}
         </div>
     );

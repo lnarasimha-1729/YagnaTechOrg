@@ -1,13 +1,55 @@
 const courseRepo = require('../repositories/CourseRepository');
 const sectionRepo = require('../repositories/SectionRepository');
 const lessonRepo = require('../repositories/LessonRepository');
+const questionRepo = require('../repositories/QuestionRepository');
+const quizSubmissionRepo = require('../repositories/QuizSubmissionRepository');
 const { User, Course } = require('../models');
 const watchStore = require('./watchStore');
+const { QueryTypes } = require('sequelize');
+const authDb = require('../config/authDatabase');
+const env = require('../config/env');
+
+// Build an absolute URL for an uploaded asset path served by this service's
+// /uploads static mount. CourseDetails.jsx renders <img src={creator.photo}>
+// directly with no base prefix, so the API must return a fully qualified URL.
+const absoluteUpload = (relPath) => {
+    if (!relPath) return null;
+    const base = String(env.appUrl || '').replace(/\/+$/, '');
+    const clean = String(relPath).replace(/^\/+/, '');
+    return `${base}/${clean}`;
+};
 
 const safeJSON = (raw, fallback) => {
     if (raw == null) return fallback;
     if (typeof raw !== 'string') return raw;
     try { return JSON.parse(raw); } catch { return fallback; }
+};
+
+// The admin curriculum stores quiz questions in their own `questions` table
+// (QuizService.buildQuestionData): { title, type, options(JSON string),
+// answer(JSON string|raw) }. The student QuizPlayer renders the SAME data the
+// admin entered, so we normalise each row to a stable shape it can consume:
+//   { q, type, options:[...], answer }
+// where `answer` is the 0-based option index for mcq/true_false (so scoring is
+// a simple equality check) and the raw expected text(s) for fill_blanks.
+const normalizeQuizQuestion = (row) => {
+    const r = row.toJSON ? row.toJSON() : row;
+    const options = safeJSON(r.options, []);
+    let answer;
+    if (r.type === 'true_false') {
+        // options rendered as ['True','False']; map stored "true"/"false".
+        answer = String(r.answer).toLowerCase() === 'true' ? 0 : 1;
+        return { id: r.id, q: r.title, type: r.type, options: ['True', 'False'], answer };
+    }
+    if (r.type === 'fill_blanks') {
+        // No options; keep accepted answer(s) as a lowercased string list.
+        const accepted = safeJSON(r.answer, [r.answer]).map((a) => String(a).trim().toLowerCase());
+        return { id: r.id, q: r.title, type: r.type, options: [], answer: accepted };
+    }
+    // mcq (default): stored answer is a JSON array of correct option *values*.
+    const correctVals = safeJSON(r.answer, []);
+    const idx = options.findIndex((opt) => correctVals.includes(opt));
+    return { id: r.id, q: r.title, type: 'mcq', options, answer: idx };
 };
 
 const sumLessonSeconds = (lessons) =>
@@ -16,6 +58,73 @@ const sumLessonSeconds = (lessons) =>
         const [h, m, s] = String(dur).split(':').map((x) => Number(x) || 0);
         return sum + (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
     }, 0);
+
+// Resolve the instructor the admin actually assigned to a course. We prefer
+// course.instructor_ids[0] (set by the "Add new Course" form's instructor
+// dropdown) and look it up in the auth-service users table — instructors are
+// auth users with role='instructor', not local admin-DB users. Falls back to
+// the local creator (course.user_id) for legacy rows that have no
+// instructor_ids, so existing courses keep showing something instead of going
+// blank. Returns null when nothing resolves.
+const resolveInstructor = async (course) => {
+    const raw = safeJSON(course.instructor_ids, []);
+    const ids = Array.isArray(raw) ? raw : [];
+    const primary = ids.length ? String(ids[0]).trim() : '';
+
+    if (primary) {
+        try {
+            const rows = await authDb.query(
+                `SELECT u.userId AS id, u.name, u.email,
+                        u.expertise, u.bio, u.linkedinUrl, u.instructorPhoto
+                   FROM users u
+                   JOIN roles r ON r.roleId = u.roleId
+                  WHERE u.userId = :id AND r.role = 'instructor'
+                  LIMIT 1`,
+                { replacements: { id: primary }, type: QueryTypes.SELECT }
+            );
+            if (rows.length) {
+                const u = rows[0];
+                // Prefer the admin-uploaded photo (served from this service's
+                // /uploads mount). Pravatar is only a placeholder for
+                // instructors who haven't been given an image yet.
+                const photo = u.instructorPhoto
+                    ? absoluteUpload(u.instructorPhoto)
+                    : `https://i.pravatar.cc/200?u=${u.id}`;
+                return {
+                    id: u.id,
+                    name: u.name,
+                    email: u.email,
+                    photo,
+                    about: u.expertise || '',
+                    biography: u.bio || '',
+                    skills: u.expertise || '',
+                    linkedinUrl: u.linkedinUrl || '',
+                };
+            }
+        } catch (err) {
+            console.warn('[course] instructor lookup failed:', err.message);
+        }
+    }
+
+    // Legacy fallback: rows authored before the instructor dropdown existed
+    // only have user_id (the admin who created them). Keep that behaviour
+    // instead of returning null so the Instructor tab isn't suddenly empty.
+    if (course.user_id) {
+        const creator = await User.findByPk(course.user_id);
+        if (creator) {
+            return {
+                id: creator.id,
+                name: creator.name,
+                email: creator.email,
+                photo: creator.photo || `https://i.pravatar.cc/200?u=${creator.id}`,
+                about: creator.about || '',
+                biography: creator.biography || '',
+                skills: creator.skills || '',
+            };
+        }
+    }
+    return null;
+};
 
 const sanitizeCourse = (course, sections = [], lessons = [], creator = null) => {
     const c = course.toJSON ? course.toJSON() : { ...course };
@@ -60,22 +169,19 @@ const sanitizeCourse = (course, sections = [], lessons = [], creator = null) => 
         status: c.status,
         enrolled: 0,
         review_count: 0,
-        average_rating: 0,
+        // Real admin-set value from the courses table (Course model has an
+        // average_rating column). Was hardcoded to 0, which made the detail
+        // page always show a 0 rating regardless of what the admin entered.
+        average_rating: Number(c.average_rating || 0),
         section_count: sections.length,
         lesson_count: lessons.length,
         total_duration_secs: sumLessonSeconds(lessons),
         sections: sectionPayload,
-        creator: creator
-            ? {
-                id: creator.id,
-                name: creator.name,
-                email: creator.email,
-                photo: creator.photo || `https://i.pravatar.cc/200?u=${creator.id}`,
-                about: creator.about || '',
-                biography: creator.biography || '',
-                skills: creator.skills || '',
-            }
-            : null,
+        // creator is the already-shaped object returned by resolveInstructor
+        // (assigned-instructor first, legacy course.user_id fallback). It
+        // matches the {id,name,email,photo,about,biography,skills} shape the
+        // student CourseDetails page expects, so we pass it through.
+        creator: creator || null,
     };
 };
 
@@ -84,8 +190,42 @@ const list = async (query = {}) => {
     const page = Number(query.page) || 1;
     const offset = (page - 1) * limit;
 
+    const where = { status: 'active' };
+
+    const categoryId = Number(query.category_id);
+    const hasCategory = Number.isInteger(categoryId) && categoryId > 0;
+
+    if (hasCategory) {
+        // Category-scoped path. The student reaches this only after picking a
+        // category card, and categories are already college-gated upstream
+        // (CategoryService.list filters by clg_ids). So we trust that gate and
+        // list every active course an admin assigned to this category — no
+        // course-level college filter (courses don't carry clg_ids).
+        where.category_id = categoryId;
+    } else {
+        // No category → legacy/public catalog path. Preserve the original
+        // college gate so existing callers (Overview, etc.) are unaffected:
+        // an empty/absent clgId returns nothing, flagged no_college.
+        const clgId = typeof query.clgId === 'string' ? query.clgId.trim() : '';
+        if (!clgId) {
+            return {
+                data: [],
+                total: 0,
+                per_page: limit,
+                current_page: page,
+                last_page: 1,
+                categories: [],
+                no_college: true,
+            };
+        }
+        const escapedClgId = Course.sequelize.escape(JSON.stringify(clgId));
+        where[require('sequelize').Op.and] = [
+            Course.sequelize.literal(`JSON_CONTAINS(clg_ids, ${escapedClgId})`),
+        ];
+    }
+
     const { count, rows } = await Course.findAndCountAll({
-        where: { status: 'active' },
+        where,
         order: [['id', 'DESC']],
         limit,
         offset,
@@ -101,14 +241,23 @@ const list = async (query = {}) => {
     };
 };
 
-const detailsBySlug = async (slug) => {
+const detailsBySlug = async (slug, clgId = null) => {
     const course = await Course.findOne({ where: { slug } });
     if (!course) return null;
+
+    // College gate: when the caller has a college set, the course's clg_ids
+    // must contain it. Returning null is treated by the controller as
+    // 404 — we deliberately don't 403 so we don't leak which slugs exist
+    // for other colleges.
+    if (clgId) {
+        const ids = Array.isArray(course.clg_ids) ? course.clg_ids : [];
+        if (!ids.includes(clgId)) return null;
+    }
 
     const sections = await sectionRepo.findByCourse(course.id);
     const sectionIds = sections.map((s) => s.id);
     const lessons = await lessonRepo.findBySectionIds(sectionIds);
-    const creator = course.user_id ? await User.findByPk(course.user_id) : null;
+    const creator = await resolveInstructor(course);
 
     return {
         course: sanitizeCourse(course, sections, lessons, creator),
@@ -131,7 +280,7 @@ const playerData = async (slug, lessonIdRaw, userIdRaw) => {
     const sections = await sectionRepo.findByCourse(course.id);
     const sectionIds = sections.map((s) => s.id);
     const lessons = await lessonRepo.findBySectionIds(sectionIds);
-    const creator = course.user_id ? await User.findByPk(course.user_id) : null;
+    const creator = await resolveInstructor(course);
     const sanitized = sanitizeCourse(course, sections, lessons, creator);
 
     const flatLessons = sanitized.sections.flatMap((s) => s.lessons);
@@ -153,10 +302,59 @@ const playerData = async (slug, lessonIdRaw, userIdRaw) => {
             attachment: currentLessonRow.attachment || '',
             description: currentLessonRow.description || '',
             sort: currentLessonRow.sort,
+            // Quiz-only admin-set metadata — shown on the cover/intro screen
+            // before the student clicks Start Quiz. Null on non-quiz lessons.
+            total_mark: currentLessonRow.lesson_type === 'quiz'
+                ? Number(currentLessonRow.total_mark || 0) : null,
+            pass_mark: currentLessonRow.lesson_type === 'quiz'
+                ? Number(currentLessonRow.pass_mark || 0) : null,
+            retake: currentLessonRow.lesson_type === 'quiz'
+                ? Number(currentLessonRow.retake || 0) : null,
         }
         : null;
 
     const userId = Number(userIdRaw) > 0 ? Number(userIdRaw) : 0;
+
+    // For quiz lessons, load the admin-authored questions and expose them so
+    // the player shows exactly what the admin added. QuizPlayer reads
+    // lesson.questions (falling back to legacy lesson.attachment JSON). We
+    // also surface this student's prior attempts so that re-entering the
+    // lesson shows the last score and the correct "try again" state instead
+    // of a fresh quiz.
+    if (lesson && currentLessonRow.lesson_type === 'quiz') {
+        const rows = await questionRepo.findByQuiz(currentLessonRow.id);
+        lesson.questions = rows.map(normalizeQuizQuestion);
+
+        // Read per-quiz state from the JSON mirror on the student row
+        // (users.quizScores[quiz_id]) — auth-DB scoped, so the auth userId
+        // string round-trips correctly even though quiz_submissions.user_id
+        // clamps large ids to INT max.
+        let quizState = { attempts_used: 0, last_score: null, last_total: null };
+        if (userId) {
+            try {
+                const rows = await authDb.query(
+                    `SELECT JSON_EXTRACT(quizScores, CONCAT('$."', :qid, '"')) AS slot
+                       FROM users WHERE userId = :uid`,
+                    {
+                        replacements: { qid: String(currentLessonRow.id), uid: String(userId) },
+                        type: QueryTypes.SELECT,
+                    }
+                );
+                const raw = rows[0]?.slot;
+                const slot = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (slot && typeof slot === 'object') {
+                    quizState = {
+                        attempts_used: Number(slot.attempts) || 0,
+                        last_score: slot.score == null ? null : Number(slot.score),
+                        last_total: slot.total == null ? null : Number(slot.total),
+                    };
+                }
+            } catch (e) {
+                console.warn('[playerData] quizScores read failed:', e.message);
+            }
+        }
+        lesson.quiz_state = quizState;
+    }
     const stored = userId ? watchStore.getHistory(course.id, userId) : null;
     const completedIds = stored ? stored.completed_lesson : [];
     const totalLessons = sanitized.lesson_count;
@@ -188,4 +386,87 @@ const playerData = async (slug, lessonIdRaw, userIdRaw) => {
     };
 };
 
-module.exports = { list, detailsBySlug, detailsFirstActive, playerData };
+// Record one quiz attempt for a student. The frontend computes the score
+// (it already does for instant feedback); we persist score/total so a later
+// page load can restore the result and remaining-retry state. Returns the
+// authoritative attempt count after saving.
+const submitQuiz = async ({ quiz_id, user_id, score, total, answers }) => {
+    // Keep BOTH forms of the user id around:
+    //   uidStr — the auth users.userId PK (string; can exceed INT range)
+    //   uidNum — what we write into quiz_submissions.user_id (declared BIGINT
+    //            in the model but the underlying MySQL column is INT, so
+    //            values > 2^31-1 get clamped). We use uidStr for everything
+    //            that must round-trip the real identity (the JSON mirror and
+    //            attempt counting via auth-side keys).
+    const uidStr = String(user_id || '').trim();
+    const uidNum = Number(user_id) > 0 ? Number(user_id) : 0;
+    const qid = Number(quiz_id);
+    if (!uidStr || !qid) {
+        // No identity → can't persist per-user; report a transient count of 1
+        // so the client still shows the result for this session.
+        return { attempts_used: 1, persisted: false };
+    }
+    await quizSubmissionRepo.create({
+        quiz_id: qid,
+        user_id: uidNum,
+        score: Number(score),
+        total: Number(total),
+        correct_answer: JSON.stringify(score),
+        wrong_answer: JSON.stringify(Math.max(0, Number(total) - Number(score))),
+        submits: JSON.stringify({ score: Number(score), total: Number(total), answers: answers || null }),
+    });
+
+    // Mirror onto the student schema: users.quizScores is a JSON object
+    // keyed by quiz_id. Each quiz's slot holds the latest score/total plus
+    // attempt count. Keys are independent — submitting quiz A never touches
+    // quiz B's slot. JSON_SET on a NULL column is fine: COALESCE seeds it
+    // to '{}' on first write. We compute the per-user attempt count by
+    // reading the current JSON slot (auth-DB scoped to uidStr), avoiding
+    // the INT-clamping bug in quiz_submissions.user_id.
+    let attempts_used = 1;
+    try {
+        const cur = await authDb.query(
+            `SELECT JSON_EXTRACT(quizScores, CONCAT('$."', :qid, '".attempts')) AS prev
+               FROM users WHERE userId = :uid`,
+            { replacements: { qid: String(qid), uid: uidStr }, type: QueryTypes.SELECT }
+        );
+        const prev = cur[0]?.prev;
+        attempts_used = (Number.isFinite(Number(prev)) ? Number(prev) : 0) + 1;
+
+        await authDb.query(
+            `UPDATE users
+                SET quizScores = JSON_SET(
+                    COALESCE(quizScores, JSON_OBJECT()),
+                    CONCAT('$."', :qid, '"'),
+                    JSON_OBJECT(
+                        'score', :score,
+                        'total', :total,
+                        'attempts', :attempts,
+                        'lastAttemptAt', CAST(NOW() AS CHAR)
+                    )
+                )
+              WHERE userId = :uid`,
+            {
+                replacements: {
+                    qid: String(qid),
+                    score: Number(score),
+                    total: Number(total),
+                    attempts: attempts_used,
+                    uid: uidStr,
+                },
+                type: QueryTypes.UPDATE,
+            }
+        );
+    } catch (e) {
+        // Best-effort: the submission row is the source of truth, the JSON
+        // mirror is denormalized convenience. Don't fail the request.
+        console.warn('[submitQuiz] failed to mirror users.quizScores:', e.message);
+        // Fall back to the clamped-int count if mirror failed entirely.
+        try { attempts_used = await quizSubmissionRepo.countByQuizAndUser(qid, uidNum); }
+        catch { /* keep attempts_used = 1 */ }
+    }
+
+    return { attempts_used, persisted: true };
+};
+
+module.exports = { list, detailsBySlug, detailsFirstActive, playerData, submitQuiz };

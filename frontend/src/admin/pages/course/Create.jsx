@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { createMeta, storeCourse } from '../../api/course';
+import { listInstructors } from '../../api/instructor';
+import { listLanguages } from '../../api/language';
 
 const flatCats = (tree) => {
     const flat = [];
@@ -11,8 +13,6 @@ const flatCats = (tree) => {
     });
     return flat;
 };
-
-const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Arabic', 'Hindi', 'Chinese', 'Japanese'];
 
 const STATUS_RADIOS = [
     { id: 'status_active', value: 'active', label: 'Active', color: 'text-success', ring: 'focus:ring-success' },
@@ -58,25 +58,68 @@ export default function CourseCreate() {
         expiry_period: 'lifetime',
         number_of_month: '',
         enable_drip_content: '0',
+        // Auth-service userId of the instructor selected from the dropdown.
+        // Sent as instructors[] on submit so the backend stores it in
+        // course.instructor_ids (CourseService.create line 181).
+        instructor_id: '',
     });
     const [thumbnail, setThumbnail] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+
+    // Instructor dropdown source — admin instructors API
+    // (GET /api/admin/manage/instructors). Loaded once on mount; small list,
+    // so we pull everything in a single request.
+    const [instructors, setInstructors] = useState([]);
+    const [instructorsLoading, setInstructorsLoading] = useState(true);
+    const [instructorsError, setInstructorsError] = useState(null);
+
+    const [languages, setLanguages] = useState([]);
+    const [languagesLoading, setLanguagesLoading] = useState(true);
+
+    const loadInstructors = () => {
+        setInstructorsLoading(true);
+        setInstructorsError(null);
+        listInstructors({ per_page: 1000 })
+            .then((r) => setInstructors(r?.instructors || []))
+            .catch((e) =>
+                setInstructorsError(
+                    e?.response?.data?.error || e?.message || 'Failed to load instructors'
+                )
+            )
+            .finally(() => setInstructorsLoading(false));
+    };
 
     useEffect(() => {
         createMeta()
             .then((r) => setCats(flatCats(r.categories || [])))
             .catch(() => setCats([]));
+        loadInstructors();
+        setLanguagesLoading(true);
+        listLanguages()
+            .then((r) => setLanguages(r?.languages || []))
+            .catch(() => setLanguages([]))
+            .finally(() => setLanguagesLoading(false));
     }, []);
 
     const set = (k, v) => setForm((s) => ({ ...s, [k]: v }));
 
     const submit = async (e) => {
         e.preventDefault();
+        if (!form.instructor_id) {
+            toast.error('Please select an instructor');
+            return;
+        }
         setSubmitting(true);
         const fd = new FormData();
-        Object.entries(form).forEach(([k, v]) => fd.append(k, v));
+        // instructor_id is the form-state key; we send it on the wire as
+        // instructors[] (CourseService expects body.instructors as an array
+        // and JSON-stringifies it into course.instructor_ids).
+        Object.entries(form).forEach(([k, v]) => {
+            if (k === 'instructor_id') return;
+            fd.append(k, v);
+        });
         fd.append('course_type', 'general');
-        fd.append('instructors[]', '1');
+        fd.append('instructors[]', form.instructor_id);
         if (thumbnail) fd.append('thumbnail', thumbnail);
 
         try {
@@ -221,14 +264,74 @@ export default function CourseCreate() {
                                     className="ol-form-control"
                                     name="language"
                                     required
+                                    disabled={languagesLoading}
                                     value={form.language}
                                     onChange={(e) => set('language', e.target.value)}
                                 >
-                                    <option value="">Select your course language</option>
-                                    {LANGUAGES.map((l) => (
-                                        <option key={l} value={l.toLowerCase()} className="capitalize">{l}</option>
+                                    <option value="">
+                                        {languagesLoading
+                                            ? 'Loading languages…'
+                                            : languages.length === 0
+                                                ? 'No languages — add one in Manage Language'
+                                                : 'Select your course language'}
+                                    </option>
+                                    {languages.map((l) => (
+                                        <option key={l.id} value={l.name.toLowerCase()} className="capitalize">
+                                            {l.name}
+                                        </option>
                                     ))}
                                 </select>
+                            </div>
+
+                            {/* Instructor — sourced from the admin instructor API
+                                (auth-service users with role='instructor'). Required:
+                                a course must have an assigned instructor. Disabled
+                                while loading / on fetch error so the form can't be
+                                submitted with an invalid value. */}
+                            <div className="mb-3">
+                                <label className="ol-form-label" htmlFor="instructor_id">
+                                    Instructor<span className="text-danger ml-1">*</span>
+                                </label>
+                                <select
+                                    id="instructor_id"
+                                    className="ol-form-control"
+                                    name="instructor_id"
+                                    required
+                                    disabled={instructorsLoading || !!instructorsError}
+                                    value={form.instructor_id}
+                                    onChange={(e) => set('instructor_id', e.target.value)}
+                                >
+                                    <option value="">
+                                        {instructorsLoading
+                                            ? 'Loading instructors…'
+                                            : instructorsError
+                                                ? 'Failed to load instructors'
+                                                : instructors.length === 0
+                                                    ? 'No instructors available — add one first'
+                                                    : 'Select an instructor'}
+                                    </option>
+                                    {instructors.map((ins) => {
+                                        const label = ins.name || ins.email || ins.id;
+                                        const sub = ins.expertise ? ` — ${ins.expertise}` : '';
+                                        return (
+                                            <option key={ins.id} value={ins.id}>
+                                                {label}{sub}
+                                            </option>
+                                        );
+                                    })}
+                                </select>
+                                {instructorsError && (
+                                    <div className="text-[13px] text-danger mt-1">
+                                        {instructorsError}{' '}
+                                        <button
+                                            type="button"
+                                            onClick={loadInstructors}
+                                            className="text-skin underline ml-1"
+                                        >
+                                            Retry
+                                        </button>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="mb-3">

@@ -3,9 +3,35 @@ const slugify = require('../helpers/slugify');
 const { upload, removeFile, niceFileName } = require('../helpers/fileUploader');
 const { HttpError } = require('../middlewares/error');
 
-const list = async () => {
+// clgIds can arrive as `clgIds[]=a&clgIds[]=b` (multi-value form fields,
+// which express parses as an array), as a single string `clgIds=a`, or as
+// `clgIds[]` already coerced to an array — normalize to a deduped string[].
+const normalizeClgIds = (raw) => {
+    if (raw == null) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return Array.from(new Set(arr.map((v) => String(v).trim()).filter(Boolean)));
+};
+
+// `clgId` gates the public student view: when absent we return an empty list
+// (the spec says "show nothing until the student picks a college") flagged
+// with no_college so the UI can prompt them. When present, only categories
+// mapped to that college are returned — never another college's.
+//
+// Admin-side callers (CourseService.createMeta) call list() with no arg and
+// still get the full unfiltered tree, preserving existing behaviour.
+const list = async (clgId = undefined) => {
     try {
-        const categories = await categoryRepo.findRootWithChildren();
+        if (clgId === undefined) {
+            const categories = await categoryRepo.findRootWithChildren();
+            return { categories };
+        }
+
+        const trimmed = typeof clgId === 'string' ? clgId.trim() : '';
+        if (!trimmed) {
+            return { categories: [], no_college: true };
+        }
+
+        const categories = await categoryRepo.findRootWithChildrenForCollege(trimmed);
         return { categories };
     } catch (err) {
         console.warn('[categories] DB query failed:', err.message);
@@ -30,6 +56,10 @@ const create = async (body, files = {}) => {
         sort: 0,
         keywords: keywords || null,
         description: description || null,
+        // Persist the college IDs picked in the Add Category form. Stored as
+        // JSON (column type DataTypes.JSON) so we can query them later with
+        // JSON_CONTAINS when filtering "categories at college X".
+        clg_ids: normalizeClgIds(body.clgIds ?? body['clgIds[]']),
     };
 
     if (files.thumbnail?.[0]) {
@@ -67,6 +97,12 @@ const update = async (id, body, files = {}) => {
         keywords: keywords || null,
         description: description || null,
     };
+
+    // Only overwrite clg_ids if the edit form actually sent it — otherwise an
+    // edit that doesn't touch colleges would silently wipe the mapping.
+    if (body.clgIds !== undefined || body['clgIds[]'] !== undefined) {
+        data.clg_ids = normalizeClgIds(body.clgIds ?? body['clgIds[]']);
+    }
 
     if (files.thumbnail?.[0]) {
         const f = files.thumbnail[0];

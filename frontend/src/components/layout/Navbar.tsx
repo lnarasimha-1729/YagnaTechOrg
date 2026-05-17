@@ -90,15 +90,28 @@ const Navbar = () => {
     { name: "Companies", href: "/companies", icon: Briefcase },
   ];
 
+  // On admin pages the layout uses a fixed-width sidebar (w-[260px]).
+  // The shared Navbar's `container-ngo` (centered + padded) leaves the
+  // logo floating over neither column. Switching to a full-width row
+  // with a 260px-wide logo slot aligns the logo with the sidebar's
+  // left edge so it sits directly above the "Main Menu" column.
+  const isAdmin = location.pathname.startsWith("/admin");
+  const wrapperCls = isAdmin
+    ? "flex items-center justify-between h-16 lg:h-20 pr-4 sm:pr-6 lg:pr-8"
+    : "flex items-center justify-between h-16 lg:h-20";
+  const logoSlotCls = isAdmin
+    ? "w-[260px] shrink-0 flex items-center px-3"
+    : "";
+
   return (
     <nav className="sticky top-0 z-50 bg-card/80 backdrop-blur-md border-b border-border/50">
-      <div className="container-ngo">
-        <div className="flex items-center justify-between h-16 lg:h-20">
+      <div className={isAdmin ? "" : "container-ngo"}>
+        <div className={wrapperCls}>
           {/* Logo */}
           <Link
             to="/"
             onClick={(e) => scrollToTopWithOffset(e, "/")}
-            className="flex items-center space-x-3 text-xl font-bold text-gradient transition-transform"
+            className={`flex items-center space-x-3 text-xl font-bold text-gradient transition-transform ${logoSlotCls}`}
           >
             <img
               src={Logo}

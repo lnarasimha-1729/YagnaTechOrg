@@ -24,6 +24,7 @@ const ICONS = {
     users: <Icon d={<><circle cx="9" cy="8" r="3.2" /><path d="M2.5 20c0-3.3 2.9-6 6.5-6s6.5 2.7 6.5 6" /><circle cx="17.5" cy="9.5" r="2.5" /><path d="M15 20c0-2.3 1.5-4 3.5-4s3 1.2 3.5 3" /></>} />,
     certificate: <Icon d={<><circle cx="12" cy="9" r="5" /><path d="M8.5 13 7 21l5-3 5 3-1.5-8" /></>} />,
     college: <Icon d={<><path d="M3 21h18" /><path d="M5 21V8l7-4 7 4v13" /><path d="M9 21V12h6v9" /></>} />,
+    settings: <Icon d={<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></>} />,
     chevron: <Icon className="ml-auto transition-transform" d={<path d="m6 9 6 6 6-6" />} />,
     external: <Icon className="w-[14px] h-[14px]" d={<><path d="M14 3h7v7" /><path d="M10 14 21 3" /><path d="M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6" /></>} />,
     logout: <Icon d={<><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></>} />,
@@ -79,6 +80,14 @@ const MENU = [
                     { label: 'Add New Student', to: '/admin/students/create' },
                 ],
             },
+            {
+                key: 'instructor',
+                label: 'Instructor',
+                children: [
+                    { label: 'Manage Instructors', to: '/admin/instructors' },
+                    { label: 'Add New Instructor', to: '/admin/instructors/create' },
+                ],
+            },
         ],
     },
     {
@@ -88,6 +97,15 @@ const MENU = [
         children: [
             { label: 'Manage Colleges', to: '/admin/colleges' },
             { label: 'Add New College', to: '/admin/colleges/create' },
+        ],
+    },
+    {
+        key: 'systemSettings',
+        label: 'System Settings',
+        icon: ICONS.settings,
+        section: 'settings',
+        children: [
+            { label: 'Manage Language', to: '/admin/settings/languages' },
         ],
     },
 ];
@@ -226,46 +244,65 @@ export default function AdminLayout() {
             <div className="flex flex-1">
                 <aside className="w-[260px] bg-white border-r border-border shrink-0 flex flex-col">
                     <div className="flex-1 overflow-y-auto px-3 pt-5 pb-8">
-                        <p className="text-[11px] uppercase tracking-wider text-gray font-semibold px-3 mt-2 mb-2">
-                            Main Menu
-                        </p>
                         <nav className="flex flex-col gap-1">
-                            {visibleMenu.map((item) => {
-                                if (!item.children) {
+                            {(() => {
+                                const renderItem = (item) => {
+                                    if (!item.children) {
+                                        return (
+                                            <NavLink key={item.key} to={item.to} className={topLinkCls} end>
+                                                <span className="text-gray">{item.icon}</span>
+                                                <span>{item.label}</span>
+                                            </NavLink>
+                                        );
+                                    }
+                                    const active = isGroupActive(item, pathname);
+                                    const isOpen = open[item.key];
                                     return (
-                                        <NavLink key={item.key} to={item.to} className={topLinkCls} end>
-                                            <span className="text-gray">{item.icon}</span>
-                                            <span>{item.label}</span>
-                                        </NavLink>
+                                        <div key={item.key}>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggle(item.key)}
+                                                className={`w-full flex items-center gap-3 px-3 py-[10px] rounded-ol-8 text-[14px] font-semibold transition-colors ${
+                                                    active ? 'bg-lightgreen text-skin' : 'text-gray hover:bg-lightgreen hover:text-skin'
+                                                }`}
+                                                aria-expanded={isOpen}
+                                            >
+                                                <span className={active ? 'text-skin' : 'text-gray'}>{item.icon}</span>
+                                                <span>{item.label}</span>
+                                                <span className={`ml-auto transition-transform ${isOpen ? 'rotate-180' : ''}`}>
+                                                    {ICONS.chevron}
+                                                </span>
+                                            </button>
+                                            {isOpen && (
+                                                <ul className="mt-1 mb-1 list-none p-0 flex flex-col gap-[2px] relative">
+                                                    <span className="absolute left-[22px] top-1 bottom-1 w-px bg-ebordermuted" />
+                                                    {item.children.map((c) => renderChild(c, item.key))}
+                                                </ul>
+                                            )}
+                                        </div>
                                     );
-                                }
-                                const active = isGroupActive(item, pathname);
-                                const isOpen = open[item.key];
+                                };
+
+                                const mainItems = visibleMenu.filter((i) => i.section !== 'settings');
+                                const settingsItems = visibleMenu.filter((i) => i.section === 'settings');
+
                                 return (
-                                    <div key={item.key}>
-                                        <button
-                                            type="button"
-                                            onClick={() => toggle(item.key)}
-                                            className={`w-full flex items-center gap-3 px-3 py-[10px] rounded-ol-8 text-[14px] font-semibold transition-colors ${
-                                                active ? 'bg-lightgreen text-skin' : 'text-gray hover:bg-lightgreen hover:text-skin'
-                                            }`}
-                                            aria-expanded={isOpen}
-                                        >
-                                            <span className={active ? 'text-skin' : 'text-gray'}>{item.icon}</span>
-                                            <span>{item.label}</span>
-                                            <span className={`ml-auto transition-transform ${isOpen ? 'rotate-180' : ''}`}>
-                                                {ICONS.chevron}
-                                            </span>
-                                        </button>
-                                        {isOpen && (
-                                            <ul className="mt-1 mb-1 list-none p-0 flex flex-col gap-[2px] relative">
-                                                <span className="absolute left-[22px] top-1 bottom-1 w-px bg-ebordermuted" />
-                                                {item.children.map((c) => renderChild(c, item.key))}
-                                            </ul>
+                                    <>
+                                        <p className="text-[11px] uppercase tracking-wider text-gray font-semibold px-3 mt-2 mb-2">
+                                            Main Menu
+                                        </p>
+                                        {mainItems.map(renderItem)}
+                                        {settingsItems.length > 0 && (
+                                            <>
+                                                <p className="text-[11px] uppercase tracking-wider text-gray font-semibold px-3 mt-4 mb-2">
+                                                    Settings
+                                                </p>
+                                                {settingsItems.map(renderItem)}
+                                            </>
                                         )}
-                                    </div>
+                                    </>
                                 );
-                            })}
+                            })()}
                         </nav>
 
                     </div>

@@ -13,6 +13,12 @@ export default function PreAssessment() {
   const [answers, setAnswers] = useState<{ [key: string]: string }>({});
   const [timeLeft, setTimeLeft] = useState(0);
   const [loading, setLoading] = useState(true);
+  // Total allotted time for this assessment, captured when it loads. Time
+  // taken = initialTime − timeLeft at the moment of submission.
+  const initialTimeRef = useRef(0);
+  // Mirror of timeLeft so submitAssessment (a memoised callback that doesn't
+  // depend on timeLeft) can read the live remaining time without going stale.
+  const timeLeftRef = useRef(0);
 
   useEffect(() => {
     hasSubmittedRef.current = false;
@@ -62,6 +68,8 @@ export default function PreAssessment() {
         setAssessment(res.data);
 
         const initialTime = res.data.timer || 1800; // default 30 mins
+        initialTimeRef.current = initialTime;
+        timeLeftRef.current = initialTime;
         setTimeLeft(initialTime);
       } catch (err) {
         console.error(err);
@@ -89,10 +97,18 @@ export default function PreAssessment() {
       const percentage = ((correctCount / totalQuestions) * 100).toFixed(2);
       const userId = localStorage.getItem("userId");
 
+      // Time taken = total allotted − time remaining at submission, clamped
+      // to [0, total] so a timeout/beacon edge case can't send junk.
+      const elapsed = Math.min(
+        Math.max(initialTimeRef.current - timeLeftRef.current, 0),
+        initialTimeRef.current
+      );
+
       const payload = {
         userId,
         assessmentId,
         preScore: Number(percentage),
+        preScoreDuration: elapsed,
       };
 
       try {
@@ -111,7 +127,7 @@ export default function PreAssessment() {
         // doesn't block submission — it just means the unlock happens once the
         // user retakes or the gate falls back to profile.preScore on next load.
         try {
-          await submitPreAssessment(Number(percentage));
+          await submitPreAssessment(Number(percentage), null, elapsed);
         } catch (gateErr) {
           console.warn("Pre-assessment gate update failed:", gateErr);
         }
@@ -156,7 +172,10 @@ export default function PreAssessment() {
     }
 
     const interval = setInterval(() => {
-      setTimeLeft((t) => t - 1);
+      setTimeLeft((t) => {
+        timeLeftRef.current = t - 1;
+        return t - 1;
+      });
     }, 1000);
 
     return () => clearInterval(interval);

@@ -1,6 +1,7 @@
+const { QueryTypes } = require('sequelize');
 const liveRepo = require('../repositories/LiveClassRepository');
-const userRepo = require('../repositories/UserRepository');
 const settingRepo = require('../repositories/SettingRepository');
+const authDb = require('../config/authDatabase');
 const { HttpError } = require('../middlewares/error');
 
 const getZoomToken = async () => {
@@ -60,8 +61,23 @@ const listByCourse = async (course_id) => {
 };
 
 const instructors = async () => {
-    const users = await userRepo.findInstructors();
-    return { instructors: users };
+    // Instructors live in the auth-service DB (lucy_devdb.users joined to roles),
+    // not the admin-service's local users table. Mirror InstructorService.list
+    // so the Live Class form picker shows the same people as Manage → Instructors.
+    try {
+        const rows = await authDb.query(
+            `SELECT u.userId AS id, u.name, u.email
+               FROM users u
+               JOIN roles r ON r.roleId = u.roleId
+              WHERE r.role = :role
+              ORDER BY u.name ASC`,
+            { replacements: { role: 'instructor' }, type: QueryTypes.SELECT }
+        );
+        return { instructors: rows };
+    } catch (err) {
+        console.warn('[liveclass.instructors] auth DB query failed:', err.message);
+        return { instructors: [] };
+    }
 };
 
 const create = async ({ course_id, body }) => {

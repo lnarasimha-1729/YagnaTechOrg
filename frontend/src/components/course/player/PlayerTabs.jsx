@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { findCourseCertificate, issueCourseCertificate } from '@/api/course/courseApi';
 import { useAuth } from '@/hooks/useAuth';
+import LiveClassPane from '@/zoom-live-class/player/LiveClassPane';
+import ForumTab from '@/forum/ForumTab';
 
 // Post-assessment score required to earn a certificate. Tweak here if the
 // course threshold changes; keep in sync with Certificate.tsx.
@@ -9,6 +11,7 @@ const POST_ASSESSMENT_PASS_THRESHOLD = 50;
 const TABS = [
     { key: 'summary', label: 'Summary', icon: 'fa-blog' },
     { key: 'live-class', label: 'Live class', icon: 'fa-video' },
+    { key: 'discussion', label: 'Discussion', icon: 'fa-comments' },
     { key: 'certificate', label: 'Certificate', icon: 'fa-graduation-cap' },
 ];
 
@@ -35,7 +38,8 @@ export default function PlayerTabs({ course, lesson, progress, completedCount })
             </ul>
             <div className="p-5 text-gray-800">
                 {tab === 'summary' && <SummaryPane lesson={lesson} course={course} progress={progress} completedCount={completedCount} />}
-                {tab === 'live-class' && <LiveClassPane />}
+                {tab === 'live-class' && <LiveClassPane course={course} />}
+                {tab === 'discussion' && <ForumTab course={course} />}
                 {tab === 'certificate' && <CertificatePane progress={progress} course={course} />}
             </div>
         </div>
@@ -65,18 +69,6 @@ function Stat({ label, value }) {
         <div className="bg-gray-100 rounded-lg p-3">
             <p className="text-[11px] text-gray-500 uppercase tracking-wide">{label}</p>
             <p className="text-[18px] font-semibold text-gray-900 mt-1">{value}</p>
-        </div>
-    );
-}
-
-function LiveClassPane() {
-    return (
-        <div className="text-white/70">
-            <p className="mb-4">No upcoming live classes are scheduled. Live sessions hosted by the instructor will appear here.</p>
-            <button type="button" className="ol-btn-outline" disabled>
-                <i className="fa fa-calendar mr-2" />
-                Connect Zoom
-            </button>
         </div>
     );
 }

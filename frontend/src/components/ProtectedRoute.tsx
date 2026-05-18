@@ -38,7 +38,7 @@ import { Navigate } from 'react-router-dom';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  requiredRole?: string;
+  requiredRole?: string | string[];
 }
 
 const ProtectedRoute = ({ children, requiredRole }: ProtectedRouteProps) => {
@@ -68,8 +68,11 @@ const ProtectedRoute = ({ children, requiredRole }: ProtectedRouteProps) => {
     return <Navigate to="/login" replace />;
   }
 
-  if (requiredRole && user.role !== requiredRole) {
-    return <Navigate to="/dashboard" replace />;
+  if (requiredRole) {
+    const allowed = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
+    if (!user.role || !allowed.includes(user.role)) {
+      return <Navigate to="/dashboard" replace />;
+    }
   }
 
   return <>{children}</>;

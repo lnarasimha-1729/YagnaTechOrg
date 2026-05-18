@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import ConfirmDialog from '../../components/ConfirmDialog';
+import Modal from '../../components/Modal';
 import { listStudents, deleteStudent, listStudentColleges, sendProgramRequest } from '../../api/student';
 import { BsThreeDotsVertical } from 'react-icons/bs';
 
@@ -28,6 +29,7 @@ export default function StudentIndex() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [confirm, setConfirm] = useState(null);
+    const [bulkOpen, setBulkOpen] = useState(false);
 
     // Show every student on one page (no pager rendered). A high per_page
     // returns all signed-up students in a single request; search still works
@@ -106,7 +108,10 @@ export default function StudentIndex() {
     const isEmpty = rows.length === 0;
 
     return (
-        <div>
+        // min-w-0 lets this column shrink below the table's intrinsic width
+        // inside the admin layout's flex <main>; without it the wide table
+        // pushes the whole page wider and the viewport scrolls horizontally.
+        <div className="min-w-0">
             <div className="ol-card rounded-ol-8 mb-3">
                 <div className="ol-card-body py-12px px-20px my-3">
                     <div className="flex items-center justify-between flex-wrap gap-3">
@@ -125,32 +130,41 @@ export default function StudentIndex() {
                 </div>
             </div>
 
-            <div className="ol-card p-3">
-                <div className="ol-card-body">
-                    <div className="grid grid-cols-12 gap-3 mb-3 mt-3 items-center">
-                        <div className="col-span-12 md:col-span-3">
+            <div className="ol-card p-3 min-w-0">
+                <div className="ol-card-body min-w-0">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3 mt-3">
+                        <div className="w-full md:w-auto">
                             <ExportDropdown onPdf={handlePrint} onPrint={handlePrint} />
                         </div>
-                        <div className="col-span-12 md:col-span-4">
-                            <CollegeFilter
-                                value={query.college || ''}
-                                onChange={onCollegeFilter}
-                            />
-                        </div>
-                        <div className="col-span-12 md:col-span-5">
-                            <form onSubmit={onSearch} className="grid grid-cols-12 gap-3">
-                                <div className="col-span-12 md:col-span-9">
-                                    <input
-                                        className="ol-form-control w-full"
-                                        name="search"
-                                        type="text"
-                                        placeholder="Search user"
-                                        defaultValue={query.search || ''}
-                                    />
-                                </div>
-                                <div className="col-span-12 md:col-span-3">
-                                    <button type="submit" className="ol-btn-primary w-full">Search</button>
-                                </div>
+                        {/* Bulk Request + Search college + Search user grouped on the right. */}
+                        <div className="flex flex-col md:flex-row md:items-center gap-3">
+                            {/* Bulk Request is only relevant once a college
+                                is chosen — the bulk action targets students
+                                of the selected college. */}
+                            {query.college && (
+                                <button
+                                    type="button"
+                                    className="ol-btn-primary whitespace-nowrap w-full md:w-auto"
+                                    onClick={() => setBulkOpen(true)}
+                                >
+                                    Bulk Request
+                                </button>
+                            )}
+                            <div className="w-full md:w-[220px]">
+                                <CollegeFilter
+                                    value={query.college || ''}
+                                    onChange={onCollegeFilter}
+                                />
+                            </div>
+                            <form onSubmit={onSearch} className="flex gap-3">
+                                <input
+                                    className="ol-form-control w-full md:w-[240px]"
+                                    name="search"
+                                    type="text"
+                                    placeholder="Search user"
+                                    defaultValue={query.search || ''}
+                                />
+                                <button type="submit" className="ol-btn-primary whitespace-nowrap">Search</button>
                             </form>
                         </div>
                     </div>
@@ -183,7 +197,11 @@ export default function StudentIndex() {
                                 </p>
                                 {loading && <span className="text-[12px] text-gray">Refreshing…</span>}
                             </div>
-                            <div className="overflow-x-auto">
+                            {/* Scrollbar lives on THIS container only — the
+                                wide table scrolls here instead of widening
+                                the page. w-full + max-w-full + min-w-0 make
+                                the box clip rather than grow to fit content. */}
+                            <div className="w-full max-w-full min-w-0 overflow-x-auto">
                                 <table className="e-table">
                                     <thead>
                                         <tr>
@@ -267,6 +285,144 @@ export default function StudentIndex() {
                     onCancel={() => setConfirm(null)}
                     onConfirm={() => handleDelete(confirm.id)}
                 />
+            )}
+
+            {bulkOpen && (
+                <Modal title="Bulk Program Request" onClose={() => setBulkOpen(false)} size="lg">
+                    <BulkRequestForm
+                        students={rows}
+                        college={query.college}
+                        onDone={() => { setBulkOpen(false); load(); }}
+                    />
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+// Body of the Bulk Request modal. From / To are 1-based row positions in the
+// current (college-filtered) student list; Send fires the program request to
+// every student in that inclusive range, then refreshes the table via onDone.
+function BulkRequestForm({ students = [], college, onDone }) {
+    const [from, setFrom] = useState('');
+    const [to, setTo] = useState('');
+    const [program, setProgram] = useState('');
+    const [sending, setSending] = useState(false);
+
+    const total = students.length;
+    const fromN = Number(from);
+    const toN = Number(to);
+    const rangeValid =
+        from !== '' && to !== '' &&
+        Number.isInteger(fromN) && Number.isInteger(toN) &&
+        fromN >= 1 && toN >= fromN && toN <= total;
+    const canSend = rangeValid && program !== '' && !sending;
+
+    // Inclusive 1-based range → slice of the students array.
+    const targets = rangeValid ? students.slice(fromN - 1, toN) : [];
+
+    const handleSend = async () => {
+        if (!canSend) return;
+        setSending(true);
+        let ok = 0;
+        let failed = 0;
+        // Sequential — keeps backend load predictable and lets one failure
+        // not abort the rest.
+        for (const s of targets) {
+            try {
+                await sendProgramRequest(s.id, program);
+                ok += 1;
+            } catch {
+                failed += 1;
+            }
+        }
+        setSending(false);
+        if (ok > 0) {
+            toast.success(
+                `Program request sent to ${ok} student${ok > 1 ? 's' : ''}` +
+                (failed ? ` (${failed} failed)` : '')
+            );
+        } else {
+            toast.error('Failed to send program requests');
+        }
+        // Refresh the table so the Program Request / Request Status columns
+        // reflect the new requests.
+        onDone?.();
+    };
+
+    return (
+        <div>
+            <p className="text-[13px] text-gray mb-3">
+                {college ? <>College: <span className="font-semibold text-dark">{college}</span> · </> : null}
+                {total} student{total === 1 ? '' : 's'} listed. Enter a row range
+                (1–{total}) and pick a program.
+            </p>
+
+            {/* 10-col grid: From / To take 2 each, Program 4, Send 2. */}
+            <div className="grid grid-cols-1 sm:grid-cols-10 gap-3 items-end">
+                <div className="sm:col-span-2">
+                    <label className="ol-form-label">From</label>
+                    <input
+                        type="number"
+                        min="1"
+                        max={total}
+                        className="ol-form-control"
+                        placeholder="From"
+                        value={from}
+                        onChange={(e) => setFrom(e.target.value)}
+                        disabled={sending}
+                    />
+                </div>
+                <div className="sm:col-span-2">
+                    <label className="ol-form-label">To</label>
+                    <input
+                        type="number"
+                        min="1"
+                        max={total}
+                        className="ol-form-control"
+                        placeholder="To"
+                        value={to}
+                        onChange={(e) => setTo(e.target.value)}
+                        disabled={sending}
+                    />
+                </div>
+                <div className="sm:col-span-4">
+                    <label className="ol-form-label">Program</label>
+                    <select
+                        className="ol-form-control"
+                        value={program}
+                        onChange={(e) => setProgram(e.target.value)}
+                        disabled={sending}
+                    >
+                        <option value="">Select a program</option>
+                        {PROGRAM_OPTIONS.map((p) => (
+                            <option key={p} value={p}>{p}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="sm:col-span-2">
+                    <button
+                        type="button"
+                        className="ol-btn-primary w-full"
+                        disabled={!canSend}
+                        onClick={handleSend}
+                    >
+                        {sending ? 'Sending…' : 'Send'}
+                    </button>
+                </div>
+            </div>
+
+            {/* Inline validation hint + selection preview. */}
+            {from !== '' && to !== '' && !rangeValid && (
+                <p className="text-[12px] text-danger mt-2">
+                    Enter a valid range between 1 and {total}, with “From” ≤ “To”.
+                </p>
+            )}
+            {rangeValid && (
+                <p className="text-[12px] text-gray mt-2">
+                    This will send the request to {targets.length} student
+                    {targets.length === 1 ? '' : 's'} (rows {fromN}–{toN}).
+                </p>
             )}
         </div>
     );

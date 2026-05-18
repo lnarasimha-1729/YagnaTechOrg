@@ -1,6 +1,7 @@
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const courseRepo = require('../repositories/CourseRepository');
 const categoryRepo = require('../repositories/CategoryRepository');
+const authDb = require('../config/authDatabase');
 const sectionRepo = require('../repositories/SectionRepository');
 const lessonRepo = require('../repositories/LessonRepository');
 const seoRepo = require('../repositories/SeoFieldRepository');
@@ -22,6 +23,73 @@ const DEFAULT_DRIP = JSON.stringify({
 const filterEmpty = (arr) =>
     Array.isArray(arr) ? arr.filter((v) => v !== null && v !== undefined && v !== '') : [];
 
+// Build the Sequelize `where` fragment that scopes a query to an instructor's
+// own courses (they own the row OR appear in instructor_ids). Returns null for
+// admins / when no scoping applies. `instructor_ids` is a TEXT column (JSON
+// array, CSV, or single value) — delimiter-aware LIKE matchers avoid a short
+// id false-matching inside a longer one (123 inside 1234).
+const buildInstructorScope = (user) => {
+    if (user?.role !== 'instructor' || user.id == null) return null;
+    const uid = String(user.id);
+    return {
+        [Op.or]: [
+            { user_id: uid },
+            { instructor_ids: { [Op.like]: `%"${uid}"%` } }, // JSON array element
+            { instructor_ids: uid },                          // exact whole value
+            { instructor_ids: { [Op.like]: `${uid},%` } },    // CSV: first
+            { instructor_ids: { [Op.like]: `%,${uid},%` } },  // CSV: middle
+            { instructor_ids: { [Op.like]: `%,${uid}` } },    // CSV: last
+        ],
+    };
+};
+
+// Merge a base `where` with the instructor scope so a count reflects only the
+// instructor's courses. For admins (scope null) the base `where` is returned
+// as-is.
+const scopedWhere = (base, scope) =>
+    scope ? { ...base, [Op.and]: [...(base[Op.and] || []), scope] } : base;
+
+// Parse a course's `instructor_ids` (TEXT — JSON array, CSV, or single value)
+// into an array of id strings. Unlike zoom-live-class.courseInstructorIds this
+// does NOT fold in user_id — we want the *assigned* instructors only.
+const parseInstructorIds = (raw) => {
+    if (raw == null || raw === '') return [];
+    if (Array.isArray(raw)) return raw.map((v) => String(v)).filter(Boolean);
+    const s = String(raw).trim();
+    try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed.map((v) => String(v)).filter(Boolean);
+        if (parsed) return [String(parsed)];
+    } catch {
+        if (s.includes(',')) return s.split(',').map((v) => v.trim()).filter(Boolean);
+        return [s];
+    }
+    return [];
+};
+
+// Batch-resolve instructor profiles from the auth-service DB (lucy_devdb.users)
+// — instructors are auth-service users, not lms_admin.users. Returns a map
+// keyed by userId string. Best-effort: a DB failure yields an empty map so the
+// course list still renders.
+const fetchInstructorsByIds = async (ids) => {
+    const unique = [...new Set(ids.map((v) => String(v)).filter(Boolean))];
+    if (!unique.length) return {};
+    try {
+        const rows = await authDb.query(
+            `SELECT u.userId AS id, u.name, u.email, u.instructorPhoto AS photo
+               FROM users u
+              WHERE u.userId IN (:ids)`,
+            { replacements: { ids: unique }, type: QueryTypes.SELECT }
+        );
+        const byId = {};
+        for (const r of rows) byId[String(r.id)] = r;
+        return byId;
+    } catch (err) {
+        console.warn('[courses] instructor lookup failed:', err.message);
+        return {};
+    }
+};
+
 const emptyResponse = (query = {}) => ({
     status: query.status || 'all',
     instructor: query.instructor || 'all',
@@ -34,16 +102,16 @@ const emptyResponse = (query = {}) => ({
     free_courses: 0,
 });
 
-const list = async (query) => {
+const list = async (query, user = null) => {
     try {
-        return await dbList(query);
+        return await dbList(query, user);
     } catch (err) {
         console.warn('[courses] DB query failed:', err.message);
         return emptyResponse(query);
     }
 };
 
-const dbList = async (query) => {
+const dbList = async (query, user = null) => {
     const { category, search, price, instructor, status, page = 1 } = query;
     const where = {};
     const parent = {};
@@ -65,6 +133,19 @@ const dbList = async (query) => {
     if (price && price !== 'all') where.is_paid = price === 'paid' ? 1 : price === 'free' ? 0 : 2;
     if (instructor && instructor !== 'all') where.user_id = instructor;
     if (status && status !== 'all') where.status = status;
+
+    // Instructors only see their own courses — either they own the course
+    // (user_id matches) or they're listed in instructor_ids. Admins see all.
+    // `instructorScope` is reused below so the stat-card counts (active,
+    // pending, upcoming, …) reflect the SAME scoped set as the course list,
+    // not global totals.
+    const instructorScope = buildInstructorScope(user);
+    if (instructorScope) {
+        where[Op.and] = [
+            ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+            instructorScope,
+        ];
+    }
 
     const limit = 20;
     const offset = (Number(page) - 1) * limit;
@@ -98,11 +179,26 @@ const dbList = async (query) => {
     const lessonCountByCourse = Object.fromEntries(lessonCounts.map((r) => [r.course_id, Number(r.count) || 0]));
     const sectionCountByCourse = Object.fromEntries(sectionCounts.map((r) => [r.course_id, Number(r.count) || 0]));
 
+    // Resolve the *assigned* instructor for each course from `instructor_ids`
+    // (auth-service users). `creator` (the FK-bound user_id) is the admin who
+    // owns the row, not the teaching instructor — so the list must show the
+    // instructor_ids person. One batched auth-DB lookup for all rows.
+    const allInstructorIds = rows.flatMap((r) => parseInstructorIds(r.instructor_ids));
+    const instructorsById = await fetchInstructorsByIds(allInstructorIds);
+
     const enrichedRows = rows.map((row) => {
         const json = row.toJSON();
+        const assignedIds = parseInstructorIds(json.instructor_ids);
+        // First resolvable assigned instructor drives the list's Instructor
+        // cell. Fall back to `creator` only when no instructor is assigned.
+        const assigned = assignedIds
+            .map((id) => instructorsById[String(id)])
+            .find(Boolean);
         return {
             ...json,
-            instructor: json.creator || null, // frontend reads c.instructor.name / .email
+            instructor: assigned
+                ? { id: assigned.id, name: assigned.name, email: assigned.email, photo: assigned.photo }
+                : json.creator || null, // frontend reads c.instructor.name / .email
             category: json.Category || json.category || null, // frontend reads c.category?.title
             lesson_count: lessonCountByCourse[json.id] || 0,
             section_count: sectionCountByCourse[json.id] || 0,
@@ -110,12 +206,15 @@ const dbList = async (query) => {
         };
     });
 
+    // Stat-card counts. For an instructor these are scoped to their own
+    // courses (same instructorScope as the list) so the cards match the list
+    // below them. For admins the counts are global.
     const [pending_courses, active_courses, upcoming_courses, paid_courses, free_courses] = await Promise.all([
-        courseRepo.count({ status: 'pending' }),
-        courseRepo.count({ status: 'active' }),
-        courseRepo.count({ status: 'upcoming' }),
-        courseRepo.count({ is_paid: 1 }),
-        courseRepo.count({ is_paid: 0 }),
+        courseRepo.count(scopedWhere({ status: 'pending' }, instructorScope)),
+        courseRepo.count(scopedWhere({ status: 'active' }, instructorScope)),
+        courseRepo.count(scopedWhere({ status: 'upcoming' }, instructorScope)),
+        courseRepo.count(scopedWhere({ is_paid: 1 }, instructorScope)),
+        courseRepo.count(scopedWhere({ is_paid: 0 }, instructorScope)),
     ]);
 
     return {
@@ -201,9 +300,25 @@ const create = async ({ body, files = {}, userId }) => {
     return { success: 'Course added successfully', course_id: course.id };
 };
 
-const edit = async (id) => {
+// Predicate: instructor is allowed to act on this course only if they own it
+// (course.user_id) or they're listed in course.instructor_ids. Mirrors the
+// LIKE-match the list endpoint uses; tighter parsing happens for
+// zoom-live-class via that module's courseInstructorIds().
+const instructorCanTouch = (course, user) => {
+    if (!course || !user) return false;
+    const uid = String(user.id);
+    if (String(course.user_id || '') === uid) return true;
+    const raw = course.instructor_ids;
+    if (!raw) return false;
+    return String(raw).includes(uid);
+};
+
+const edit = async (id, user = null) => {
     const course_details = await courseRepo.findById(id);
     if (!course_details) throw new HttpError(404, 'Not found');
+    if (user?.role === 'instructor' && !instructorCanTouch(course_details, user)) {
+        throw new HttpError(403, 'Forbidden');
+    }
     const sections = await sectionRepo.findByCourse(id);
     return { course_details, sections };
 };

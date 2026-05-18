@@ -23,4 +23,18 @@ const adminOnly = (req, res, next) => {
     });
 };
 
-module.exports = { auth, adminOnly };
+// Allows admin/root OR instructor. Used on course read/write surfaces that
+// instructors may legitimately reach (course list, course edit, curriculum,
+// zoom-live-class). The service layer further scopes results to courses they
+// own / are assigned to (see CourseService.list scoping by req.user).
+const adminOrInstructor = (req, res, next) => {
+    auth(req, res, () => {
+        const role = req.user?.role;
+        if (role !== 'admin' && role !== 'root' && role !== 'instructor') {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+        next();
+    });
+};
+
+module.exports = { auth, adminOnly, adminOrInstructor };

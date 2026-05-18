@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { ArrowRight } from "lucide-react";
 import { getProfile } from "@/api/authApi";
 import { getUserProgress } from "@/api/userProgressApi";
 
@@ -172,11 +172,6 @@ const ProgramsPage = () => {
                 Your courses are personalised to the college you study at.
                 Open your profile and pick your college to unlock this section.
               </p>
-              <Link to="/dashboard?tab=profile">
-                <Button className="bg-[#177385] text-white hover:bg-[#135f6e]">
-                  Go to Profile
-                </Button>
-              </Link>
             </CardContent>
           </Card>
         )}
@@ -203,7 +198,32 @@ const ProgramsPage = () => {
                 className="rounded-xl shadow-md hover:shadow-lg transition"
               >
                 <CardHeader>
-                  <CardTitle className="text-[#177385]">{program.title}</CardTitle>
+                  <div className="flex items-center justify-between gap-3">
+                    <CardTitle className="text-[#177385]">{program.title}</CardTitle>
+                    {/* Bare arrow — gated on pre-assessment. Disabled until
+                        `locked` flips false; starts the program, or jumps
+                        straight back into the player when already enrolled. */}
+                    <button
+                      type="button"
+                      className={
+                        locked
+                          ? "shrink-0 bg-transparent border-0 p-0 text-gray-400 cursor-not-allowed"
+                          : "shrink-0 bg-transparent border-0 p-0 text-[#177385] hover:text-[#135f6e] cursor-pointer"
+                      }
+                      onClick={
+                        locked
+                          ? undefined
+                          : isEnrolled
+                            ? () => handleContinue(enrolledTarget!.player_path)
+                            : () => handleStart(program.id)
+                      }
+                      disabled={locked}
+                      aria-label={isEnrolled ? "Continue program" : "Start program"}
+                      title={isEnrolled ? "Continue program" : "Start program"}
+                    >
+                      <ArrowRight className="w-6 h-6" />
+                    </button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   {program.description && (
@@ -234,28 +254,6 @@ const ProgramsPage = () => {
                       </ul>
                     );
                   })()}
-                  {/* Button is gated on pre-assessment only. Once `locked`
-                      flips to false (pre-assessment passed), "Start Program"
-                      becomes clickable; if the student is already enrolled
-                      in this program, the label switches to "Continue" and
-                      jumps them straight back into the player. */}
-                  <Button
-                    className={
-                      locked
-                        ? "bg-gray-300 text-gray-600 cursor-not-allowed hover:bg-gray-300"
-                        : "bg-[#177385] text-white hover:bg-[#135f6e]"
-                    }
-                    onClick={
-                      locked
-                        ? undefined
-                        : isEnrolled
-                          ? () => handleContinue(enrolledTarget!.player_path)
-                          : () => handleStart(program.id)
-                    }
-                    disabled={locked}
-                  >
-                    {isEnrolled ? "Continue" : "Start Course"}
-                  </Button>
                   {locked && (
                     <p className="text-xs text-gray-500 mt-2">
                       Complete Pre-Assessment to unlock

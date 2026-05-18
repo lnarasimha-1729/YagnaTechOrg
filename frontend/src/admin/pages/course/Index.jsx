@@ -9,6 +9,7 @@ import {
     listCourses, deleteCourse, setCourseStatus, duplicateCourse, approveCourse,
 } from '../../api/course';
 import { listCategories } from '../../api/category';
+import { getStoredUser } from '../../api/auth';
 
 // VITE_ADMIN_API_URL points at admin-service (port 4000) — fine for asset
 // URLs (uploaded images) but wrong for "view course on frontend" links,
@@ -30,6 +31,8 @@ const STATUS_BADGE = {
 
 export default function CourseIndex() {
     const [params, setParams] = useSearchParams();
+    // Instructors can't create courses — hide the "Add New Course" button.
+    const isInstructor = useMemo(() => getStoredUser()?.role === 'instructor', []);
     const [data, setData] = useState(null);
     const [categories, setCategories] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -144,8 +147,14 @@ export default function CourseIndex() {
         { label: 'Active courses', value: data.active_courses, filter: { status: 'active' } },
         { label: 'Pending courses', value: data.pending_courses, filter: { status: 'pending' } },
         { label: 'Upcoming courses', value: data.upcoming_courses, filter: { status: 'upcoming' } },
-        { label: 'Free courses', value: data.free_courses, filter: { price: 'free' } },
-        { label: 'Paid courses', value: data.paid_courses, filter: { price: 'paid' } },
+        // Free/Paid stats are hidden for instructors — they manage courses,
+        // not pricing.
+        ...(isInstructor
+            ? []
+            : [
+                { label: 'Free courses', value: data.free_courses, filter: { price: 'free' } },
+                { label: 'Paid courses', value: data.paid_courses, filter: { price: 'paid' } },
+            ]),
     ];
 
     const rows = data.courses.data;
@@ -160,10 +169,12 @@ export default function CourseIndex() {
                             <i className="fi-rr-settings-sliders" />
                             Manage Courses
                         </h4>
-                        <Link className="ol-btn-outline-secondary flex items-center gap-10px" to="/admin/course/create">
-                            <span className="fi-rr-plus" />
-                            <span>Add New Course</span>
-                        </Link>
+                        {!isInstructor && (
+                            <Link className="ol-btn-outline-secondary flex items-center gap-10px" to="/admin/course/create">
+                                <span className="fi-rr-plus" />
+                                <span>Add New Course</span>
+                            </Link>
+                        )}
                     </div>
                 </div>
             </div>
@@ -231,7 +242,11 @@ export default function CourseIndex() {
                     {isEmpty ? (
                         <div className="py-12 text-center border border-dashed border-border rounded-ol-8">
                             <p className="text-[16px] font-semibold text-dark mb-1">No courses found</p>
-                            <p className="text-[13px] text-gray">Try adjusting your filters or add a new course.</p>
+                            <p className="text-[13px] text-gray">
+                                {isInstructor
+                                    ? 'Try adjusting your filters. Courses assigned to you by an admin appear here.'
+                                    : 'Try adjusting your filters or add a new course.'}
+                            </p>
                         </div>
                     ) : (
                         <div className="overflow-x-auto">

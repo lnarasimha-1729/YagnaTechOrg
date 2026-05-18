@@ -106,6 +106,7 @@ const MENU = [
         section: 'settings',
         children: [
             { label: 'Manage Language', to: '/admin/settings/languages' },
+            { label: 'Live Class Settings', to: '/admin/settings/live-class' },
         ],
     },
 ];
@@ -137,20 +138,54 @@ export default function AdminLayout() {
     // college admin and sees only the College Dashboard tab. (The dashboard
     // endpoint itself 403s if the JWT lacks a college_id, which surfaces a
     // clear "missing college" error rather than silently showing zeros.)
-    const isRootAdmin = adminUser?.is_root_admin === true;
-    const isCollegeAdmin = !isRootAdmin;
-    const visibleMenu = MENU.filter((item) =>
-        isCollegeAdmin ? item.collegeOnly === true : item.collegeOnly !== true
-    );
+    const isInstructor = adminUser?.role === 'instructor';
+    const isRootAdmin = !isInstructor && adminUser?.is_root_admin === true;
+    const isCollegeAdmin = !isInstructor && !isRootAdmin;
 
-    // Hard-stop a college admin from navigating to root-admin routes via direct
-    // URL. The sidebar already hides the links; this guards typed/bookmarked URLs.
+    // Three cohorts, three sidebars:
+    //   - Instructor: only the Course group (Manage Courses), and only the
+    //     Curriculum + Live Class tabs inside Edit Course (see Edit.jsx).
+    //   - College admin: only College Dashboard.
+    //   - Root admin: full menu.
+    let visibleMenu;
+    if (isInstructor) {
+        // Only the Course group, and within it only "Manage Courses" —
+        // instructors manage the courses they're assigned to but can't
+        // create new courses or touch coupons.
+        visibleMenu = MENU
+            .filter((item) => item.key === 'course' && !item.collegeOnly)
+            .map((item) => ({
+                ...item,
+                children: (item.children || []).filter((c) => c.to === '/admin/courses'),
+            }));
+    } else if (isCollegeAdmin) {
+        visibleMenu = MENU.filter((item) => item.collegeOnly === true);
+    } else {
+        visibleMenu = MENU.filter((item) => item.collegeOnly !== true);
+    }
+
+    // Hard-stop direct URL access to routes outside an instructor's surface.
+    // Instructors are allowed on the course list and the course-edit page.
+    // Edit Course tabs are filtered inside Edit.jsx.
+    const isInstructorPathAllowed = (p) =>
+        p === '/admin' ||
+        p === '/admin/' ||
+        p === '/admin/courses' ||
+        p.startsWith('/admin/courses?') ||
+        /^\/admin\/course\/edit\/\d+/.test(p);
+
     useEffect(() => {
+        if (isInstructor) {
+            if (!isInstructorPathAllowed(pathname)) {
+                navigate('/admin/courses', { replace: true });
+            }
+            return;
+        }
         if (!isCollegeAdmin) return;
         if (pathname.startsWith('/admin/college')) return;
         // Avoid redundant navigate() calls — only redirect when actually off-route.
         navigate('/admin/college', { replace: true });
-    }, [isCollegeAdmin, pathname, navigate]);
+    }, [isInstructor, isCollegeAdmin, pathname, navigate]);
 
     const handleLogout = async () => {
         await adminLogout();
@@ -324,7 +359,11 @@ export default function AdminLayout() {
                     </div>
                 </aside>
 
-                <main className="flex-1 p-6">
+                {/* min-w-0 — a flex child defaults to min-width:auto, which
+                    lets wide content (e.g. data tables) push <main> past the
+                    viewport and scroll the whole page. min-w-0 lets it shrink
+                    so a page's own overflow-x container scrolls instead. */}
+                <main className="flex-1 min-w-0 p-6">
                     <Outlet />
                 </main>
             </div>

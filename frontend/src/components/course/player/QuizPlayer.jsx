@@ -311,7 +311,7 @@ export default function QuizPlayer({ lesson, onCompleted }) {
                 ) : (
                     <div className="flex flex-col gap-2">
                         <p className={`text-lg font-bold ${passed ? 'text-skin' : 'text-danger'}`}>
-                            {passed ? 'Passed 🎉' : 'Failed'}
+                            {passed ? 'Passed' : 'Failed'}
                         </p>
                         <p className="font-semibold text-dark">
                             Score: {score} / {questions.length} ({percent}%) — Pass mark: {passMark} (50%)

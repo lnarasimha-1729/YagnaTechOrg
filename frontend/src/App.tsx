@@ -25,6 +25,7 @@ import ProgramSelect from "./pages/ProgramSelect";
 import CoursePrograms from "./pages/CoursePrograms";
 import CourseDetailsPage from "./pages/CourseDetailsPage";
 import CoursePlayer from "./pages/CoursePlayer";
+import ZoomLiveClassRoom from "./zoom-live-class/player/ZoomLiveClassRoom";
 import ProgramDetailPage from "./pages/ProgramDetailPage";
 import PreAssessmentPage from "./pages/PreAssessmentPage";
 import AdminDashboard from "./pages/Admin/AdminDashboard";
@@ -61,6 +62,7 @@ import AdminListIndex from "./admin/pages/admin/Index";
 import AdminCreate from "./admin/pages/admin/Create";
 import AdminEditPage from "./admin/pages/admin/Edit";
 import AdminManageLanguage from "./admin/pages/settings/ManageLanguage";
+import AdminLiveClassSettings from "./zoom-live-class/admin/LiveClassSettings";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
@@ -120,11 +122,13 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            {/* Admin section — talks to admin-service (port 4000) */}
+            {/* Admin section — talks to admin-service (port 4000).
+                Instructors also use these pages with a restricted sidebar
+                and per-page access controls enforced in AdminLayout. */}
             <Route
               path="/admin"
               element={
-                <ProtectedRoute requiredRole="admin">
+                <ProtectedRoute requiredRole={["admin", "instructor"]}>
                   <AdminAppLayout />
                 </ProtectedRoute>
               }
@@ -152,6 +156,7 @@ const App = () => (
               <Route path="colleges/create" element={<AdminCollegeCreate />} />
               <Route path="colleges/edit/:id" element={<AdminCollegeEdit />} />
               <Route path="settings/languages" element={<AdminManageLanguage />} />
+              <Route path="settings/live-class" element={<AdminLiveClassSettings />} />
             </Route>
 
             {/* Certificate builder — full screen, no admin chrome (mirrors admin/certificate/builder.blade.php) */}
@@ -246,6 +251,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <CoursePlayer />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/courses/programs/course-details/play/:slug/live-class/:id"
+              element={
+                <ProtectedRoute>
+                  <ZoomLiveClassRoom />
                 </ProtectedRoute>
               }
             />

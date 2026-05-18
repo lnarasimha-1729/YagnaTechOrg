@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { getCourse, updateCourse } from '../../api/course';
 import { listCategories } from '../../api/category';
+import { getStoredUser } from '../../api/auth';
 import BasicTab from './tabs/BasicTab';
 import PricingTab from './tabs/PricingTab';
 import InfoTab from './tabs/InfoTab';
@@ -10,7 +11,8 @@ import MediaTab from './tabs/MediaTab';
 import SeoTab from './tabs/SeoTab';
 import DripTab from './tabs/DripTab';
 import CurriculumTab from './tabs/CurriculumTab';
-import LiveClassTab from './tabs/LiveClassTab';
+import LiveClassTab from './tabs/LiveClassTab'; // legacy — kept for reference, unused
+import CourseLiveClasses from '@/zoom-live-class/admin/CourseLiveClasses';
 import {
     HiOutlinePencilSquare,
     HiOutlineDocumentDuplicate,
@@ -41,7 +43,19 @@ export default function CourseEdit() {
     const { id } = useParams();
     const [course, setCourse] = useState(null);
     const [categories, setCategories] = useState([]);
-    const [tab, setTab] = useState('basic');
+
+    // Instructors only get the Curriculum and Live Class tabs — the rest are
+    // admin-only. Read role once per mount; AdminLayout already enforced that
+    // an instructor can't reach this page without a valid token.
+    const isInstructor = useMemo(() => getStoredUser()?.role === 'instructor', []);
+    const visibleTabs = useMemo(
+        () => (isInstructor
+            ? TABS.filter((t) => t.key === 'curriculum' || t.key === 'live-class')
+            : TABS),
+        [isInstructor]
+    );
+
+    const [tab, setTab] = useState(isInstructor ? 'curriculum' : 'basic');
 
     const load = async () => {
         const res = await getCourse(id);
@@ -117,7 +131,7 @@ export default function CourseEdit() {
                             pale icon tile and gray label, separated by hair-line dividers. */}
                         <div className="w-full md:w-[230px] flex-shrink-0">
                             <div className="flex flex-col gap-1">
-                                {TABS.map((t, idx) => {
+                                {visibleTabs.map((t, idx) => {
                                     const active = tab === t.key;
                                     const { Icon } = t;
                                     return (
@@ -151,7 +165,7 @@ export default function CourseEdit() {
                             {tab === 'pricing' && <PricingTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}
                             {tab === 'info' && <InfoTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}
                             {tab === 'curriculum' && <CurriculumTab course={course} />}
-                            {tab === 'live-class' && <LiveClassTab course={course} />}
+                            {tab === 'live-class' && <CourseLiveClasses course={course} />}
                             {tab === 'media' && <MediaTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}
                             {tab === 'seo' && <SeoTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}
                             {tab === 'drip-content' && <DripTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}

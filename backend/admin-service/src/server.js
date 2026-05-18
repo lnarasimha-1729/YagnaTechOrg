@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const env = require('./config/env');
 const { sequelize } = require('./models');
-const { adminOnly, auth } = require('./middlewares/auth');
+const { adminOnly, auth, adminOrInstructor } = require('./middlewares/auth');
 const { errorHandler } = require('./middlewares/error');
 
 const authRoutes = require('./routes/auth.routes');
@@ -13,6 +13,8 @@ const courseRoutes = require('./routes/course.routes');
 const curriculumRoutes = require('./routes/curriculum.routes');
 const quizRoutes = require('./routes/quiz.routes');
 const liveClassRoutes = require('./routes/liveclass.routes');
+const zoomLiveClassRoutes = require('./zoom-live-class/live-class.routes');
+const forumRoutes = require('./forum/forum.routes');
 const couponRoutes = require('./routes/coupon.routes');
 const certificateRoutes = require('./routes/certificate.routes');
 const collegeDashboardRoutes = require('./routes/collegeDashboard.routes');
@@ -209,11 +211,27 @@ app.get('/api/public/course-progress', async (req, res) => {
 // Public auth endpoints (login is unauthenticated; me/logout require token)
 app.use('/api/admin', authRoutes);
 
+// Course / curriculum / zoom-live-class routers apply per-route role gates
+// internally (adminOnly vs adminOrInstructor) so instructors can manage the
+// Curriculum + Live Class tabs of their own courses. JWT decoding still
+// happens at the mount point via `auth` so req.user is populated.
+//
+// IMPORTANT: these MUST be registered before the adminOnly-gated routers
+// below. Express runs a mount's middleware (e.g. `adminOnly`) for every
+// request matching the path prefix — even when that router has no matching
+// route. `adminOnly` short-circuits with a 403 for non-admins and never
+// calls next(), so if an adminOnly mount sits earlier in the chain it kills
+// an instructor's request before it can fall through to courseRoutes.
+app.use('/api/admin', auth, categoryRoutes);
+app.use('/api/admin', auth, courseRoutes);
+app.use('/api/admin', auth, curriculumRoutes);
+app.use('/api/admin', auth, zoomLiveClassRoutes.admin);
+app.use('/api/public', zoomLiveClassRoutes.public);
+app.use('/api/admin', auth, forumRoutes.admin);
+app.use('/api/public', forumRoutes.public);
+
 // Protected admin endpoints — adminOnly enforces JWT + role
 app.use('/api/admin', adminOnly, adminRoutes);
-app.use('/api/admin', adminOnly, categoryRoutes);
-app.use('/api/admin', adminOnly, courseRoutes);
-app.use('/api/admin', adminOnly, curriculumRoutes);
 app.use('/api/admin', adminOnly, quizRoutes);
 app.use('/api/admin', adminOnly, liveClassRoutes);
 app.use('/api/admin', adminOnly, couponRoutes);
@@ -398,6 +416,17 @@ sequelize.authenticate()
             await Language.sync();
         } catch (e) {
             console.warn('[languages] table sync failed:', e.message);
+        }
+
+        // Course discussion forum — create the `forums` + `forum_reports`
+        // tables on first run so the module is usable without a manual
+        // migration. Mirrors the Languages pattern above. No-op on restart.
+        try {
+            const { Forum, ForumReport } = require('./models');
+            await Forum.sync();
+            await ForumReport.sync();
+        } catch (e) {
+            console.warn('[forum] table sync failed:', e.message);
         }
     })
     .then(start)

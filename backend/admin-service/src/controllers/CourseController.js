@@ -2,7 +2,7 @@ const courseService = require('../services/CourseService');
 const { asyncHandler } = require('../middlewares/error');
 
 exports.index = asyncHandler(async (req, res) => {
-    res.json(await courseService.list(req.query));
+    res.json(await courseService.list(req.query, req.user));
 });
 
 exports.create = asyncHandler(async (_req, res) => {
@@ -10,11 +10,18 @@ exports.create = asyncHandler(async (_req, res) => {
 });
 
 exports.store = asyncHandler(async (req, res) => {
-    res.json(await courseService.create({ body: req.body, files: req.files, userId: req.user?.id }));
+    res.json(
+        await courseService.create({
+            body: req.body,
+            files: req.files,
+            userId: req.user?.id,
+            role: req.user?.role,
+        })
+    );
 });
 
 exports.edit = asyncHandler(async (req, res) => {
-    res.json(await courseService.edit(req.params.id));
+    res.json(await courseService.edit(req.params.id, req.user));
 });
 
 exports.update = asyncHandler(async (req, res) => {

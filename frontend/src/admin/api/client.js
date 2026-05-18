@@ -16,7 +16,13 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-    const token = getToken();
+    // Admins authenticate against admin-service and store an 'admin_token'.
+    // Instructors have no admin-service login — they reach the admin shell
+    // (course management only) with their auth-service 'accessToken'. Both
+    // services sign JWTs with the same JWT_SECRET, so admin-service's `auth`
+    // middleware verifies either token. Fall back to accessToken so the
+    // instructor flow works regardless of which key holds the token.
+    const token = getToken() || localStorage.getItem('accessToken');
     if (token) config.headers.Authorization = `Bearer ${token}`;
     return config;
 });
@@ -33,18 +39,29 @@ api.interceptors.response.use(
     (error) => {
         const status = error?.response?.status;
         const url = error?.config?.url || '';
-        if (status === 401 || status === 403) {
+
+        // 401 = not authenticated (no/expired/invalid token). The session is
+        // genuinely dead — clear the token and route back to /login.
+        if (status === 401) {
             const isSilent = SILENT_AUTH_PATHS.some((p) => url.includes(p));
-            if (isSilent) {
-                clearToken();
-                return Promise.reject(error);
-            }
-            console.warn(`[admin api] ${status} on ${url} — clearing token and redirecting to /login`);
             clearToken();
-            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+            if (!isSilent && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                console.warn(`[admin api] 401 on ${url} — clearing token, redirecting to /login`);
                 window.location.href = '/login';
             }
-        } else if (error?.message) {
+            return Promise.reject(error);
+        }
+
+        // 403 = authenticated but not permitted for THIS endpoint. The token is
+        // still valid — do NOT clear it or redirect. This is normal for an
+        // instructor whose restricted role can't reach an admin-only endpoint;
+        // the calling component decides how to handle it (e.g. empty dropdown).
+        if (status === 403) {
+            console.warn(`[admin api] 403 on ${url} — not permitted for this role (token kept)`);
+            return Promise.reject(error);
+        }
+
+        if (error?.message) {
             console.error(`[admin api] error on ${url}:`, error.message);
         }
         return Promise.reject(error);

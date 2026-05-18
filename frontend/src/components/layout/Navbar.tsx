@@ -21,7 +21,6 @@ import {
   Briefcase,
   Handshake,
   HelpCircle,
-  User as UserIcon,
   LayoutDashboard,
   LogOut,
 } from "lucide-react";
@@ -221,21 +220,6 @@ const Navbar = () => {
                       <span>Dashboard</span>
                     </Link>
                   </DropdownMenuItem>
-                  {user.role !== "admin" && (
-                    <DropdownMenuItem asChild>
-                      <Link
-                        to="/dashboard"
-                        onClick={(e) => {
-                          scrollToTopWithOffset(e, "/dashboard");
-                          setIsProfileOpen(false);
-                        }}
-                        className="flex items-center gap-2"
-                      >
-                        <UserIcon className="w-4 h-4" />
-                        <span>Profile</span>
-                      </Link>
-                    </DropdownMenuItem>
-                  )}
                   <DropdownMenuItem
                     onClick={handleLogout}
                     className="flex items-center gap-2 text-destructive focus:text-destructive"

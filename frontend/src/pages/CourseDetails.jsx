@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { getCourseDetails } from '@/api/course/courseApi';
 import { enrollCourse } from '@/api/userProgressApi';
-import { fmtDuration, currency, safeArr } from '@/components/course/format';
+import { fmtDuration, safeArr } from '@/components/course/format';
 import PreviewModal from '@/components/course/PreviewModal';
 
 const TABS = [
@@ -198,27 +198,15 @@ function PricingCard({ course, onPreview, onEnroll, enrolling }) {
                     )}
                 </button>
                 <div className="p-5">
-                    <div className="mb-4">
-                        {course.is_paid === 0 ? (
-                            <span className="text-[28px] font-bold text-skin">Free</span>
-                        ) : course.discount_flag ? (
-                            <p className="m-0">
-                                <span className="text-[28px] font-bold text-dark">{currency(course.discounted_price)}</span>{' '}
-                                <del className="text-muted text-[16px]">{currency(course.price)}</del>
-                            </p>
-                        ) : (
-                            <span className="text-[28px] font-bold text-dark">{currency(course.price)}</span>
-                        )}
-                    </div>
+                    {/* Price intentionally hidden — the card shows no price.
+                        Enrollment functionality is unchanged. */}
                     <button
                         type="button"
                         onClick={onEnroll}
                         disabled={enrolling}
                         className="ol-btn-primary w-full"
                     >
-                        {enrolling
-                            ? 'Loading…'
-                            : (course.is_paid === 0 ? 'Start Learning' : 'Enroll Now')}
+                        {enrolling ? 'Loading…' : 'Go to Course'}
                     </button>
                     <ul className="mt-5 space-y-2 text-[13px] text-muted">
                         <li className="flex items-center gap-2"><i className="fa fa-check text-skin" />{course.lesson_count} lessons</li>

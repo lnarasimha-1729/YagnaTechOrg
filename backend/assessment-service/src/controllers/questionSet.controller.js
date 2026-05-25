@@ -47,13 +47,25 @@ export async function getQuestionSetById(req, res) {
     const questionSet = await QuestionSet.findByPk(id);
     if (!questionSet) return res.status(404).json({ message: "QuestionSet not found" });
 
-    // Fetch full questions
-    let questions = [];
-    if (questionSet.questions.length > 0) {
-      questions = await Question.findAll({ where: { quesId: questionSet.questions } });
+    // Fetch full questions, preserving the admin-chosen order from the
+    // canonical `questions` ID array. Sequelize.findAll returns DB order, so
+    // we reindex by quesId and walk the original ID list.
+    const orderedIds = Array.isArray(questionSet.questions) ? questionSet.questions : [];
+    let questionDetails = [];
+    if (orderedIds.length > 0) {
+      const rows = await Question.findAll({ where: { quesId: orderedIds } });
+      const byId = Object.fromEntries(rows.map((q) => [q.quesId, q]));
+      questionDetails = orderedIds.map((qid) => byId[qid]).filter(Boolean);
     }
 
-    res.json({ ...questionSet.toJSON(), questions });
+    // Preserve `questions` as the ordered ID array (matches the DB column and
+    // what the admin form needs to hydrate selection). `questionDetails`
+    // carries the joined Question objects for views that render them.
+    res.json({
+      ...questionSet.toJSON(),
+      questions: orderedIds,
+      questionDetails,
+    });
   } catch (err) {
     console.error("Error fetching QuestionSet:", err);
     res.status(500).json({ message: "Internal server error" });

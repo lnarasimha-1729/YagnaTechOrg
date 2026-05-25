@@ -41,6 +41,14 @@ const getStats = async ({ collegeId }) => {
         { replacements: { filter }, type: QueryTypes.SELECT }
     );
 
+    // Resolve the display name so the dashboard can filter the read-only
+    // student list by clgName (which is what listStudents matches on).
+    const [collegeRow] = await authDb.query(
+        `SELECT clgName FROM colleges WHERE LOWER(TRIM(clgId)) = LOWER(:filter) LIMIT 1`,
+        { replacements: { filter }, type: QueryTypes.SELECT }
+    );
+    const collegeName = collegeRow?.clgName || null;
+
     const totalStudents = students.length;
     const preAttempts = students.filter((s) => s.preScore !== null && s.preScore !== undefined).length;
     const postAttempts = students.filter((s) => s.postScore !== null && s.postScore !== undefined).length;
@@ -73,6 +81,7 @@ const getStats = async ({ collegeId }) => {
 
     return {
         college_id: collegeId,
+        college_name: collegeName,
         total_students: totalStudents,
         pre_assessment_attempts: preAttempts,
         active_learners: activeLearners,

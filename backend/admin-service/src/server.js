@@ -16,8 +16,10 @@ const liveClassRoutes = require('./routes/liveclass.routes');
 const zoomLiveClassRoutes = require('./zoom-live-class/live-class.routes');
 const forumRoutes = require('./forum/forum.routes');
 const couponRoutes = require('./routes/coupon.routes');
+const programRoutes = require('./routes/program.routes');
 const certificateRoutes = require('./routes/certificate.routes');
 const collegeDashboardRoutes = require('./routes/collegeDashboard.routes');
+const batchRoutes = require('./routes/batch.routes');
 const collegeRoutes = require('./routes/college.routes');
 const studentRoutes = require('./routes/student.routes');
 const instructorRoutes = require('./routes/instructor.routes');
@@ -52,6 +54,45 @@ app.get('/api/public/colleges', async (_req, res, next) => {
     try {
         const { colleges } = await collegeService.list({ per_page: 1000 });
         res.json(colleges);
+    } catch (e) { next(e); }
+});
+
+// Public programs list — used by the student-facing Programs page so the
+// admin-curated set drives what students see. Only active programs surface.
+//
+// Optional filters:
+//   ?clgId=<clgId>     → only programs whose clg_ids contains the college
+//   ?course_id=<id>    → only programs whose course_ids contains the course
+// Both filters AND together. The arrow on My Courses uses these to show
+// "programs that include THIS course for MY college".
+const programService = require('./services/ProgramService');
+app.get('/api/public/programs', async (req, res, next) => {
+    try {
+        const { programs } = await programService.list();
+        const clgId = typeof req.query.clgId === 'string' ? req.query.clgId.trim() : '';
+        const courseIdRaw = req.query.course_id ?? req.query.courseId;
+        const courseIdNum = courseIdRaw == null || courseIdRaw === ''
+            ? null
+            : Number(String(courseIdRaw).trim());
+        const courseId = Number.isInteger(courseIdNum) && courseIdNum > 0 ? courseIdNum : null;
+
+        const filtered = (programs || [])
+            .filter((p) => p.is_active !== false)
+            .filter((p) => {
+                if (!clgId) return true;
+                const ids = Array.isArray(p.clg_ids) ? p.clg_ids.map(String) : [];
+                return ids.includes(String(clgId));
+            })
+            .filter((p) => {
+                if (!courseId) return true;
+                // course_ids holds the new multi-value list; course_id is the
+                // legacy single-value column. Treat either as a match so old
+                // rows keep surfacing while the column-swap settles.
+                const ids = Array.isArray(p.course_ids) ? p.course_ids.map(Number) : [];
+                if (ids.includes(courseId)) return true;
+                return Number(p.course_id || 0) === courseId;
+            });
+        res.json({ programs: filtered });
     } catch (e) { next(e); }
 });
 
@@ -235,8 +276,10 @@ app.use('/api/admin', adminOnly, adminRoutes);
 app.use('/api/admin', adminOnly, quizRoutes);
 app.use('/api/admin', adminOnly, liveClassRoutes);
 app.use('/api/admin', adminOnly, couponRoutes);
+app.use('/api/admin', adminOnly, programRoutes);
 app.use('/api/admin', adminOnly, certificateRoutes);
 app.use('/api/admin', adminOnly, collegeDashboardRoutes);
+app.use('/api/admin', adminOnly, batchRoutes);
 app.use('/api/admin', adminOnly, collegeRoutes);
 app.use('/api/admin', adminOnly, studentRoutes);
 app.use('/api/admin', adminOnly, instructorRoutes);
@@ -407,6 +450,14 @@ sequelize.authenticate()
                 await authDb.query("ALTER TABLE users ADD COLUMN studentPhoto VARCHAR(255) NULL");
                 console.log("🛠️  Added users.studentPhoto column (auth DB)");
             }
+            // Seconds the student spent on the post-assessment, mirroring
+            // preScoreDuration. Surfaces on Manage Students next to the post
+            // score. Idempotent — added once when missing.
+            const hasPostScoreDuration = cols.some((c) => c.Field === 'postScoreDuration');
+            if (!hasPostScoreDuration) {
+                await authDb.query("ALTER TABLE users ADD COLUMN postScoreDuration INT NULL");
+                console.log("🛠️  Added users.postScoreDuration column (auth DB)");
+            }
         } catch (e) {
             console.warn('[auth-db] photo column check failed:', e.message);
         }
@@ -418,6 +469,27 @@ sequelize.authenticate()
             console.warn('[languages] table sync failed:', e.message);
         }
 
+        // courses.has_certificate: per-course toggle for "this course grants
+        // a certificate on completion". Older schemas don't have the column;
+        // add it on startup so the admin form can write to it and the
+        // public course-details payload can read it. Default TRUE preserves
+        // existing UX (the previous hardcoded "Certificate Course" label).
+        try {
+            const { QueryTypes } = require('sequelize');
+            const [col] = await sequelize.query(
+                "SHOW COLUMNS FROM courses WHERE Field = 'has_certificate'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!col) {
+                await sequelize.query(
+                    'ALTER TABLE courses ADD COLUMN has_certificate TINYINT(1) NOT NULL DEFAULT 1'
+                );
+                console.log('🛠️  Added courses.has_certificate column');
+            }
+        } catch (e) {
+            console.warn('[courses] has_certificate column check failed:', e.message);
+        }
+
         // Course discussion forum — create the `forums` + `forum_reports`
         // tables on first run so the module is usable without a manual
         // migration. Mirrors the Languages pattern above. No-op on restart.
@@ -427,6 +499,63 @@ sequelize.authenticate()
             await ForumReport.sync();
         } catch (e) {
             console.warn('[forum] table sync failed:', e.message);
+        }
+
+        // Programs — top-level offerings shown on the public Programs page
+        // (AI Frontier, AI Frontier Plus, Elite AI Residency, …). Same
+        // idempotent .sync() pattern as Forum so the table is created on
+        // first run without a manual migration.
+        try {
+            const { Program } = require('./models');
+            await Program.sync();
+        } catch (e) {
+            console.warn('[programs] table sync failed:', e.message);
+        }
+
+        // Batches — named cohorts of students inside a college. Created from
+        // the College Dashboard's Add/Manage Batches tabs. Member rows live
+        // in the linked batch_members table; both are created on first run.
+        try {
+            const { Batch, BatchMember } = require('./models');
+            await Batch.sync();
+            await BatchMember.sync();
+        } catch (e) {
+            console.warn('[batches] table sync failed:', e.message);
+        }
+
+        // Late-added Program columns: clg_ids (multi-select colleges) and
+        // course_id (single course FK). .sync() above creates the table but
+        // doesn't add new columns to an existing one, so we DESCRIBE first
+        // and ALTER only when absent — same pattern courses.has_certificate
+        // uses above. Safe to run on every restart.
+        try {
+            const { QueryTypes } = require('sequelize');
+            const [clgCol] = await sequelize.query(
+                "SHOW COLUMNS FROM programs WHERE Field = 'clg_ids'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!clgCol) {
+                await sequelize.query("ALTER TABLE programs ADD COLUMN clg_ids JSON NULL");
+                console.log('🛠️  Added programs.clg_ids column');
+            }
+            const [courseCol] = await sequelize.query(
+                "SHOW COLUMNS FROM programs WHERE Field = 'course_id'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!courseCol) {
+                await sequelize.query("ALTER TABLE programs ADD COLUMN course_id INT NULL");
+                console.log('🛠️  Added programs.course_id column');
+            }
+            const [courseIdsCol] = await sequelize.query(
+                "SHOW COLUMNS FROM programs WHERE Field = 'course_ids'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!courseIdsCol) {
+                await sequelize.query("ALTER TABLE programs ADD COLUMN course_ids JSON NULL");
+                console.log('🛠️  Added programs.course_ids column');
+            }
+        } catch (e) {
+            console.warn('[programs] column check failed:', e.message);
         }
 
         // live_classes.user_id holds 11-digit auth-service userIds which

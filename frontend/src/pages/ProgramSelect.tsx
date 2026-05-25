@@ -4,6 +4,7 @@ import ProgramCard, { programIconByIndex } from "@/components/programs/ProgramCa
 import { listCourses } from "@/api/course/courseApi";
 import { selectProgram } from "@/api/userProgressApi";
 import { getAcceptedProgram } from "@/api/programRequestApi";
+import { getProfile } from "@/api/authApi";
 
 interface CourseSummary {
   id: number;
@@ -98,18 +99,30 @@ const ProgramSelect = () => {
   // Fetch the real courses an admin assigned to this category. The category
   // path of the catalog returns active courses with no college filter, so
   // these are exactly what the admin added under this category.
+  // Courses are now grouped by college (clg_ids), not by category. We
+  // resolve the student's clgId from /me and fetch every active course for
+  // that college. The category_id URL param is retained only as the
+  // selectProgram() handle (the program the admin sent the student) — it
+  // no longer scopes the course list.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!categoryId) {
-        if (!cancelled) {
-          setError("No program selected. Go back and pick a program.");
-          setLoading(false);
-        }
-        return;
-      }
       try {
-        const res = await listCourses({ category_id: categoryId });
+        let clgId = "";
+        try {
+          const res = await getProfile();
+          clgId = ((res.data as any)?.collegeId as string) || "";
+        } catch {
+          /* fall through — handled below */
+        }
+        if (!clgId) {
+          if (!cancelled) {
+            setError("Your account isn't linked to a college yet. Contact your admin.");
+            setLoading(false);
+          }
+          return;
+        }
+        const res = await listCourses({ clgId });
         if (cancelled) return;
         const list = Array.isArray(res?.data) ? res.data : [];
         setCourses(
@@ -122,13 +135,13 @@ const ProgramSelect = () => {
           })),
         );
       } catch {
-        if (!cancelled) setError("Failed to load courses for this program.");
+        if (!cancelled) setError("Failed to load courses.");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [categoryId]);
+  }, []);
 
   // Click a course card → record the selection against this category (the
   // program), then land on that course's details page. program_id is the

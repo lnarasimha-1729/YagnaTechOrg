@@ -8,8 +8,8 @@ import Modal from '../../components/Modal';
 import {
     listCourses, deleteCourse, setCourseStatus, duplicateCourse, approveCourse,
 } from '../../api/course';
-import { listCategories } from '../../api/category';
 import { getStoredUser } from '../../api/auth';
+import { useCollege } from '@/hooks/useCollege';
 
 // VITE_ADMIN_API_URL points at admin-service (port 4000) — fine for asset
 // URLs (uploaded images) but wrong for "view course on frontend" links,
@@ -29,12 +29,62 @@ const STATUS_BADGE = {
     draft: 'bg-slate-200 text-slate-700',
 };
 
+// Max chips inline before collapsing the rest into a "+N more" pill. Mirrors
+// the visual treatment Category Index uses for its colleges column.
+const MAX_VISIBLE_COLLEGES = 2;
+
+// Renders the colleges assigned to a course as chips. Resolves clgId -> clgName
+// via the colleges map; falls back to the raw id while the colleges list is
+// still loading or the college was deleted.
+function CollegeChips({ clgIds, nameById }) {
+    const ids = Array.isArray(clgIds) ? clgIds.filter(Boolean) : [];
+    if (ids.length === 0) {
+        return <span className="text-[11px] text-muted">No colleges assigned</span>;
+    }
+    const visible = ids.slice(0, MAX_VISIBLE_COLLEGES);
+    const hiddenCount = ids.length - visible.length;
+    const hiddenLabel = ids
+        .slice(MAX_VISIBLE_COLLEGES)
+        .map((id) => nameById[id] || id)
+        .join(', ');
+
+    return (
+        <div className="flex flex-wrap items-center gap-1">
+            {visible.map((id) => (
+                <span
+                    key={id}
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] max-w-[120px] truncate"
+                    title={nameById[id] || id}
+                >
+                    {nameById[id] || id}
+                </span>
+            ))}
+            {hiddenCount > 0 && (
+                <span
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px]"
+                    title={hiddenLabel}
+                >
+                    +{hiddenCount} more
+                </span>
+            )}
+        </div>
+    );
+}
+
 export default function CourseIndex() {
     const [params, setParams] = useSearchParams();
     // Instructors can't create courses — hide the "Add New Course" button.
     const isInstructor = useMemo(() => getStoredUser()?.role === 'instructor', []);
     const [data, setData] = useState(null);
-    const [categories, setCategories] = useState([]);
+    // Colleges for the filter dropdown + the chip strip on each row. The hook
+    // hydrates once and is shared across the admin (Category page uses the
+    // same source), so the names stay consistent.
+    const { colleges } = useCollege();
+    const collegeNameById = useMemo(() => {
+        const map = {};
+        (colleges || []).forEach((c) => { map[c.clgId] = c.clgName; });
+        return map;
+    }, [colleges]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [confirm, setConfirm] = useState(null);
@@ -60,11 +110,6 @@ export default function CourseIndex() {
     };
 
     useEffect(() => { load(); /* eslint-disable-next-line */ }, [params]);
-    useEffect(() => {
-        listCategories()
-            .then((r) => setCategories(r.categories || []))
-            .catch(() => setCategories([]));
-    }, []);
 
     const applyFilters = (next) => {
         const cleaned = {};
@@ -197,7 +242,7 @@ export default function CourseIndex() {
                             <ExportDropdown onPdf={handleExportPdf} onPrint={handlePrint} />
                             <FilterDropdown
                                 query={query}
-                                categories={categories}
+                                colleges={colleges}
                                 courses={rows}
                                 onApply={applyFilters}
                             />
@@ -255,7 +300,7 @@ export default function CourseIndex() {
                                     <tr>
                                         <th scope="col">#</th>
                                         <th scope="col">Title</th>
-                                        <th scope="col">Category</th>
+                                        <th scope="col">Colleges</th>
                                         <th scope="col">Lesson & Section</th>
                                         <th scope="col">Enrolled Student</th>
                                         <th scope="col">Status</th>
@@ -283,9 +328,10 @@ export default function CourseIndex() {
                                                 </div>
                                             </td>
                                             <td>
-                                                <span className="text-[12px] text-gray">
-                                                    {c.category?.title || '-'}
-                                                </span>
+                                                <CollegeChips
+                                                    clgIds={Array.isArray(c.clg_ids) ? c.clg_ids : []}
+                                                    nameById={collegeNameById}
+                                                />
                                             </td>
                                             <td>
                                                 <div className="text-[12px] text-gray">
@@ -426,10 +472,10 @@ function ExportDropdown({ onPdf, onPrint }) {
     );
 }
 
-function FilterDropdown({ query, categories, courses, onApply }) {
+function FilterDropdown({ query, colleges, courses, onApply }) {
     const [open, setOpen] = useState(false);
     const [local, setLocal] = useState({
-        category: query.category || 'all',
+        college: query.college || 'all',
         status: query.status || 'all',
         instructor: query.instructor || 'all',
         price: query.price || 'all',
@@ -438,12 +484,12 @@ function FilterDropdown({ query, categories, courses, onApply }) {
 
     useEffect(() => {
         setLocal({
-            category: query.category || 'all',
+            college: query.college || 'all',
             status: query.status || 'all',
             instructor: query.instructor || 'all',
             price: query.price || 'all',
         });
-    }, [query.category, query.status, query.instructor, query.price]);
+    }, [query.college, query.status, query.instructor, query.price]);
 
     useEffect(() => {
         if (!open) return;
@@ -495,20 +541,17 @@ function FilterDropdown({ query, categories, courses, onApply }) {
                 <div className="absolute left-0 z-20 mt-1 w-[280px] bg-white border border-border rounded-ol-8 shadow-lg p-4">
                     <form onSubmit={submit} className="flex flex-col gap-3">
                         <div>
-                            <label className="ol-form-label">Category</label>
+                            <label className="ol-form-label">College</label>
                             <select
                                 className="ol-form-control w-full"
-                                value={local.category}
-                                onChange={(e) => change('category', e.target.value)}
+                                value={local.college}
+                                onChange={(e) => change('college', e.target.value)}
                             >
                                 <option value="all">All</option>
-                                {categories.map((c) => (
-                                    <optgroup key={c.id} label={c.title}>
-                                        <option value={c.slug}>{c.title}</option>
-                                        {c.childs?.map((sub) => (
-                                            <option key={sub.id} value={sub.slug}>-- {sub.title}</option>
-                                        ))}
-                                    </optgroup>
+                                {(colleges || []).map((c) => (
+                                    <option key={c.clgId} value={c.clgId}>
+                                        {c.clgName}
+                                    </option>
                                 ))}
                             </select>
                         </div>

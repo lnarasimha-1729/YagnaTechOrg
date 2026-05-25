@@ -141,6 +141,7 @@ export default function CollegeIndex() {
                                             <th scope="col">#</th>
                                             <th scope="col">College Name</th>
                                             <th scope="col">College ID</th>
+                                            <th scope="col">Batches</th>
                                             <th scope="col">Options</th>
                                         </tr>
                                     </thead>
@@ -156,6 +157,11 @@ export default function CollegeIndex() {
                                                 </td>
                                                 <td>
                                                     <p className="m-0 text-dark">{c.clgId}</p>
+                                                </td>
+                                                <td>
+                                                    <span className="inline-block px-2 py-0.5 rounded text-[12px] font-semibold bg-skin/10 text-skin">
+                                                        {c.batches_count ?? 0}
+                                                    </span>
                                                 </td>
                                                 <td>
                                                     <CollegeOptions

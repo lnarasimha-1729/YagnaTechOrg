@@ -59,57 +59,73 @@ const sumLessonSeconds = (lessons) =>
         return sum + (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
     }, 0);
 
-// Resolve the instructor the admin actually assigned to a course. We prefer
-// course.instructor_ids[0] (set by the "Add new Course" form's instructor
-// dropdown) and look it up in the auth-service users table — instructors are
-// auth users with role='instructor', not local admin-DB users. Falls back to
-// the local creator (course.user_id) for legacy rows that have no
-// instructor_ids, so existing courses keep showing something instead of going
-// blank. Returns null when nothing resolves.
+// Look up a single auth-service user by userId and shape it for the course
+// detail page. No role filter — the assigned id was set by the admin via the
+// instructor dropdown, so we trust it; filtering by `role='instructor'` here
+// caused legitimate assignments to silently fall through when the role
+// column's casing didn't match. Returns null when the id doesn't resolve.
+const fetchAuthUser = async (userId) => {
+    if (!userId) return null;
+    try {
+        const rows = await authDb.query(
+            `SELECT u.userId AS id, u.name, u.email,
+                    u.expertise, u.bio, u.linkedinUrl, u.instructorPhoto
+               FROM users u
+              WHERE u.userId = :id
+              LIMIT 1`,
+            { replacements: { id: String(userId).trim() }, type: QueryTypes.SELECT }
+        );
+        if (!rows.length) return null;
+        const u = rows[0];
+        const photo = u.instructorPhoto
+            ? absoluteUpload(u.instructorPhoto)
+            : `https://i.pravatar.cc/200?u=${u.id}`;
+        return {
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            photo,
+            about: u.expertise || '',
+            biography: u.bio || '',
+            skills: u.expertise || '',
+            linkedinUrl: u.linkedinUrl || '',
+        };
+    } catch (err) {
+        console.warn('[course] auth user lookup failed:', err.message);
+        return null;
+    }
+};
+
+// Resolve the instructor the admin assigned to a course. Walks every id in
+// course.instructor_ids (not just [0]) so a stale/deleted first id doesn't
+// block a valid later one. Only falls back to the admin-creator (course.user_id)
+// as an absolute last resort, and logs the fact so it's obvious in dev when a
+// course has no real instructor attached.
 const resolveInstructor = async (course) => {
     const raw = safeJSON(course.instructor_ids, []);
-    const ids = Array.isArray(raw) ? raw : [];
-    const primary = ids.length ? String(ids[0]).trim() : '';
+    const ids = (Array.isArray(raw) ? raw : [raw])
+        .map((v) => (v == null ? '' : String(v).trim()))
+        .filter(Boolean);
 
-    if (primary) {
-        try {
-            const rows = await authDb.query(
-                `SELECT u.userId AS id, u.name, u.email,
-                        u.expertise, u.bio, u.linkedinUrl, u.instructorPhoto
-                   FROM users u
-                   JOIN roles r ON r.roleId = u.roleId
-                  WHERE u.userId = :id AND r.role = 'instructor'
-                  LIMIT 1`,
-                { replacements: { id: primary }, type: QueryTypes.SELECT }
-            );
-            if (rows.length) {
-                const u = rows[0];
-                // Prefer the admin-uploaded photo (served from this service's
-                // /uploads mount). Pravatar is only a placeholder for
-                // instructors who haven't been given an image yet.
-                const photo = u.instructorPhoto
-                    ? absoluteUpload(u.instructorPhoto)
-                    : `https://i.pravatar.cc/200?u=${u.id}`;
-                return {
-                    id: u.id,
-                    name: u.name,
-                    email: u.email,
-                    photo,
-                    about: u.expertise || '',
-                    biography: u.bio || '',
-                    skills: u.expertise || '',
-                    linkedinUrl: u.linkedinUrl || '',
-                };
-            }
-        } catch (err) {
-            console.warn('[course] instructor lookup failed:', err.message);
-        }
+    for (const id of ids) {
+        const found = await fetchAuthUser(id);
+        if (found && found.name) return found;
     }
 
-    // Legacy fallback: rows authored before the instructor dropdown existed
-    // only have user_id (the admin who created them). Keep that behaviour
-    // instead of returning null so the Instructor tab isn't suddenly empty.
+    // Last-resort fallback: the course has no usable assignment. This is the
+    // path that historically showed the admin-creator's name instead of the
+    // real teacher — log so it's visible in dev.
     if (course.user_id) {
+        console.warn(
+            `[course] no assignable instructor on course ${course.id} ` +
+            `(instructor_ids=${JSON.stringify(course.instructor_ids)}); ` +
+            `falling back to creator user_id=${course.user_id}`
+        );
+        // Try the auth DB first (handles the case where the creator IS an
+        // instructor account); fall back to the local admin User only when
+        // that also misses.
+        const fromAuth = await fetchAuthUser(course.user_id);
+        if (fromAuth && fromAuth.name) return fromAuth;
         const creator = await User.findByPk(course.user_id);
         if (creator) {
             return {
@@ -163,10 +179,19 @@ const sanitizeCourse = (course, sections = [], lessons = [], creator = null) => 
         price: Number(c.price || 0),
         discount_flag: c.discount_flag || 0,
         discounted_price: Number(c.discounted_price || 0),
+        // Months of access after enrolment; NULL means lifetime. Surfaced on
+        // the public course-details "This course includes" line so students
+        // see the real expiry the admin set in the Pricing tab.
+        expiry_period: c.expiry_period == null ? null : Number(c.expiry_period),
         thumbnail: c.thumbnail || '',
         banner: c.banner || c.thumbnail || '',
         preview: c.preview || '',
         status: c.status,
+        // Default to true when the column is missing so older rows keep the
+        // pre-toggle behaviour ("Certificate Course" always shown).
+        has_certificate: c.has_certificate === undefined || c.has_certificate === null
+            ? true
+            : !!c.has_certificate,
         enrolled: 0,
         review_count: 0,
         // Real admin-set value from the courses table (Course model has an
@@ -192,37 +217,26 @@ const list = async (query = {}) => {
 
     const where = { status: 'active' };
 
-    const categoryId = Number(query.category_id);
-    const hasCategory = Number.isInteger(categoryId) && categoryId > 0;
-
-    if (hasCategory) {
-        // Category-scoped path. The student reaches this only after picking a
-        // category card, and categories are already college-gated upstream
-        // (CategoryService.list filters by clg_ids). So we trust that gate and
-        // list every active course an admin assigned to this category — no
-        // course-level college filter (courses don't carry clg_ids).
-        where.category_id = categoryId;
-    } else {
-        // No category → legacy/public catalog path. Preserve the original
-        // college gate so existing callers (Overview, etc.) are unaffected:
-        // an empty/absent clgId returns nothing, flagged no_college.
-        const clgId = typeof query.clgId === 'string' ? query.clgId.trim() : '';
-        if (!clgId) {
-            return {
-                data: [],
-                total: 0,
-                per_page: limit,
-                current_page: page,
-                last_page: 1,
-                categories: [],
-                no_college: true,
-            };
-        }
-        const escapedClgId = Course.sequelize.escape(JSON.stringify(clgId));
-        where[require('sequelize').Op.and] = [
-            Course.sequelize.literal(`JSON_CONTAINS(clg_ids, ${escapedClgId})`),
-        ];
+    // Course grouping is now exclusively by college. `clgId` (the logged-in
+    // student's college) is required: without it we return an empty list
+    // flagged `no_college` so the UI can prompt for a college binding. Any
+    // legacy `category_id` query param is intentionally ignored.
+    const clgId = typeof query.clgId === 'string' ? query.clgId.trim() : '';
+    if (!clgId) {
+        return {
+            data: [],
+            total: 0,
+            per_page: limit,
+            current_page: page,
+            last_page: 1,
+            categories: [],
+            no_college: true,
+        };
     }
+    const escapedClgId = Course.sequelize.escape(JSON.stringify(clgId));
+    where[require('sequelize').Op.and] = [
+        Course.sequelize.literal(`JSON_CONTAINS(clg_ids, ${escapedClgId})`),
+    ];
 
     const { count, rows } = await Course.findAndCountAll({
         where,

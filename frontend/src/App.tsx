@@ -23,6 +23,7 @@ import StudentDashboard from "./pages/StudentDashboard";
 import ProgramsPage from "./pages/Programspage";
 import ProgramSelect from "./pages/ProgramSelect";
 import CoursePrograms from "./pages/CoursePrograms";
+import ProgramsForCourse from "./pages/ProgramsForCourse";
 import CourseDetailsPage from "./pages/CourseDetailsPage";
 import CoursePlayer from "./pages/CoursePlayer";
 import ZoomLiveClassRoom from "./zoom-live-class/player/ZoomLiveClassRoom";
@@ -47,6 +48,9 @@ import AdminCourseIndex from "./admin/pages/course/Index";
 import AdminCourseCreate from "./admin/pages/course/Create";
 import AdminCourseEdit from "./admin/pages/course/Edit";
 import AdminCouponIndex from "./admin/pages/coupon/Index";
+import AdminAssessmentIndex from "./admin/pages/assessment/Index";
+import AdminProgramIndex from "./admin/pages/program/Index";
+import AdminProgramCreate from "./admin/pages/program/Create";
 import AdminCertificateIndex from "./admin/pages/certificate/Index";
 import AdminCollegeDashboard from "./admin/pages/college/Dashboard";
 import AdminCertificateSettings from "./admin/pages/certificate/Settings";
@@ -141,6 +145,9 @@ const App = () => (
               <Route path="course/create" element={<AdminCourseCreate />} />
               <Route path="course/edit/:id" element={<AdminCourseEdit />} />
               <Route path="coupons" element={<AdminCouponIndex />} />
+              <Route path="assessments" element={<AdminAssessmentIndex />} />
+              <Route path="programs" element={<AdminProgramIndex />} />
+              <Route path="programs/create" element={<AdminProgramCreate />} />
               <Route path="certificates" element={<AdminCertificateIndex />} />
               <Route path="certificate" element={<AdminCertificateSettings />} />
               <Route path="students" element={<AdminStudentIndex />} />
@@ -227,6 +234,16 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <CoursePrograms />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/courses/programs/for-course"
+              element={
+                <ProtectedRoute>
+                  <StudentDashboard
+                    contentOverride={{ title: "Programs", node: <ProgramsForCourse /> }}
+                  />
                 </ProtectedRoute>
               }
             />

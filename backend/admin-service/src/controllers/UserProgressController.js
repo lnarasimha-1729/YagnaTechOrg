@@ -52,8 +52,11 @@ const buildPlayerTarget = async (row) => {
 
 // POST /api/user-progress/select-program
 // body: { user_id?, program_id, course_id }
-// Creates or updates the (user, program) row. Course is recorded but enrollment
-// is not yet flipped on — that happens at /enroll-course.
+// Creates or updates the (user, program) row. If a course_id is supplied this
+// IS the enrollment moment — `enrolled` flips true so the Manage Courses
+// "Enrolled Student" count reflects program acceptance, not the later
+// click-into-player step. Calls without a course (program-only selection)
+// leave the existing flag untouched.
 exports.selectProgram = asyncHandler(async (req, res) => {
     const userId = resolveUserId(req);
     const programId = Number(req.body.program_id);
@@ -65,9 +68,13 @@ exports.selectProgram = asyncHandler(async (req, res) => {
     const where = { user_id: userId, program_id: programId };
     let row = await UserProgress.findOne({ where });
     if (row) {
-        await row.update({ course_id: courseId ?? row.course_id });
+        const nextCourseId = courseId ?? row.course_id;
+        await row.update({
+            course_id: nextCourseId,
+            enrolled: nextCourseId ? true : row.enrolled,
+        });
     } else {
-        row = await UserProgress.create({ ...where, course_id: courseId, enrolled: false });
+        row = await UserProgress.create({ ...where, course_id: courseId, enrolled: !!courseId });
     }
 
     // Persist the chosen program name onto the student schema so the user

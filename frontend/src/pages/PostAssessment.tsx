@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getAssessment } from "@/api/assessmentApi";
 import { updatePostScore } from "@/api/authApi";
@@ -9,6 +9,12 @@ export default function PostAssessment() {
   const [answers, setAnswers] = useState<{ [key: string]: string }>({});
   const [timeLeft, setTimeLeft] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  // Wall-clock when the assessment started rendering its questions (so we
+  // can report total seconds spent on submit). Set once after the fetch
+  // completes; later refs to the same value mean retry/submit calls all use
+  // the same start time.
+  const startedAtRef = useRef<number | null>(null);
 
   const navigate = useNavigate();
 
@@ -21,6 +27,9 @@ export default function PostAssessment() {
 
         const initialTime = res.data.timer || 1800;
         setTimeLeft(initialTime);
+        // Start the elapsed-time clock the moment we have the assessment
+        // (i.e. the student can start answering). Don't overwrite on re-runs.
+        if (startedAtRef.current == null) startedAtRef.current = Date.now();
       } catch (err) {
         console.error(err);
       } finally {
@@ -66,10 +75,17 @@ export default function PostAssessment() {
 
   try {
     const userId = localStorage.getItem("userId");
+    // Round to whole seconds so the INT column receives a clean value. Fall
+    // back to 0 only if the start ref never landed (shouldn't happen in
+    // practice — we set it during fetchAssessment).
+    const durationSeconds = startedAtRef.current != null
+      ? Math.max(0, Math.round((Date.now() - startedAtRef.current) / 1000))
+      : 0;
 
     await updatePostScore({
       userId,
       postScore: Number(percentage.toFixed(2)),
+      postScoreDuration: durationSeconds,
     });
 
     if (isTimeOver) {

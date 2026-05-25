@@ -319,18 +319,27 @@ export async function postScore(req, res) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const { postScore } = req.body;
+    const { postScore, postScoreDuration } = req.body;
 
     if (postScore === undefined) {
       return res.status(400).json({ message: "postScore is required" });
     }
 
     user.postScore = postScore;
+    // Optional — older clients don't send it. We coerce numeric strings so the
+    // INT column doesn't refuse a "180" payload.
+    if (postScoreDuration !== undefined && postScoreDuration !== null) {
+      const dur = Number(postScoreDuration);
+      if (Number.isFinite(dur) && dur >= 0) {
+        user.postScoreDuration = Math.round(dur);
+      }
+    }
     await user.save();
 
     return res.status(200).json({
       message: "Post-assessment score updated successfully",
       postScore: user.postScore,
+      postScoreDuration: user.postScoreDuration,
     });
 
   } catch (error) {

@@ -6,14 +6,19 @@ import { ArrowRight } from "lucide-react";
 import { getProfile } from "@/api/authApi";
 import { getUserProgress } from "@/api/userProgressApi";
 
-interface Category {
+// Course shape returned by /api/public/courses?clgId=… (subset we use for
+// the card view; the list endpoint returns lesson_count/section_count = 0
+// because it doesn't hydrate sections — the details page does that).
+interface CourseCard {
   id: number;
+  slug: string;
   title: string;
-  description?: string | null;
+  short_description?: string;
+  thumbnail?: string;
+  banner?: string;
+  level?: string;
+  language?: string;
 }
-
-// Map of categoryId -> list of course titles an admin added to it.
-type CoursesByCategory = Record<number, string[]>;
 
 const ADMIN_BASE = (import.meta.env.VITE_ADMIN_API_URL as string) || "http://localhost:4000";
 // Pre-assessment pass threshold. Matches Assesments.jsx so the "Completed" label
@@ -22,33 +27,36 @@ const PRE_ASSESSMENT_PASS = 60;
 
 const ProgramsPage = () => {
   const navigate = useNavigate();
-  const [categories, setCategories] = useState<Category[]>([]);
-  // Course titles per category, shown under each category card.
-  const [coursesByCategory, setCoursesByCategory] = useState<CoursesByCategory>({});
+  // Courses are now sourced directly from /api/public/courses?clgId=<student's
+  // college>, mirroring how categories used to surface for the student's
+  // college. The category cards layer has been removed (the admin form maps
+  // courses straight to colleges via clg_ids).
+  const [courses, setCourses] = useState<CourseCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Single cached gate status for all programs (existing pre-assessment is global,
-  // not per-program). Once the user passes any pre-assessment, every card unlocks.
+  // Single cached gate status (existing pre-assessment is global, not
+  // per-course). Once the user passes the pre-assessment, every card unlocks.
   const [gatePassed, setGatePassed] = useState<boolean | null>(null);
   // Has the student picked a college on their Profile? Until this is true,
-  // My Courses renders an empty-state CTA instead of any program cards —
+  // My Courses renders an empty-state CTA instead of any course cards —
   // the spec requires zero exposure of catalog content pre-college.
   const [hasCollege, setHasCollege] = useState<boolean | null>(null);
   // Enrolled target (program_id + player_path). When the current student has
-  // already enrolled in a program, the matching card swaps "Start Program" for
-  // "Continue" and jumps straight back into the player on click.
+  // already enrolled, the "Continue" jump shows on every card so they can land
+  // back in the player no matter which one they click — there's no per-course
+  // enrollment record on this payload.
   const [enrolledTarget, setEnrolledTarget] = useState<{
     program_id: number; player_path: string;
   } | null>(null);
   // Defer rendering the cards until the enrolled-target lookup has resolved
-  // (success OR failure). Otherwise the buttons paint as "Start Program" first
+  // (success OR failure). Otherwise the buttons paint as "Start" first
   // and flip to "Continue" once the API returns — confusing for returning students.
   const [progressLoading, setProgressLoading] = useState(true);
 
   // Single mount effect: resolve the student's profile first (preScore +
-  // collegeId), then fetch categories SCOPED to that college. Categories are
-  // only fetched when a college is set — the spec requires zero catalog
-  // exposure before the student picks one.
+  // collegeId), then fetch courses SCOPED to that college. Courses are only
+  // fetched when a college is set — the spec requires zero catalog exposure
+  // before the student picks one.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -71,44 +79,23 @@ const ProgramsPage = () => {
         return;
       }
 
-      // No college → don't even hit the categories endpoint. The empty-state
-      // CTA handles this case.
+      // No college → don't hit the courses endpoint. The empty-state CTA
+      // handles this case.
       if (!clgId) {
         if (!cancelled) setLoading(false);
         return;
       }
 
       try {
-        const { data } = await axios.get(`${ADMIN_BASE}/api/public/categories`, {
+        const { data } = await axios.get(`${ADMIN_BASE}/api/public/courses`, {
           params: { clgId },
           timeout: 30000,
         });
         if (cancelled) return;
-        const cats: Category[] = Array.isArray(data?.categories) ? data.categories : [];
-        setCategories(cats);
-
-        // For each category, pull the courses an admin assigned to it and
-        // keep just the titles. One request per category, run in parallel;
-        // a failed lookup degrades to an empty list for that card only.
-        const entries = await Promise.all(
-          cats.map(async (cat) => {
-            try {
-              const r = await axios.get(`${ADMIN_BASE}/api/public/courses`, {
-                params: { category_id: cat.id },
-                timeout: 30000,
-              });
-              const rows = Array.isArray(r.data?.data) ? r.data.data : [];
-              return [cat.id, rows.map((c: any) => String(c.title))] as const;
-            } catch {
-              return [cat.id, [] as string[]] as const;
-            }
-          }),
-        );
-        if (!cancelled) {
-          setCoursesByCategory(Object.fromEntries(entries));
-        }
+        const rows: CourseCard[] = Array.isArray(data?.data) ? data.data : [];
+        setCourses(rows);
       } catch {
-        if (!cancelled) setError("Failed to load programs.");
+        if (!cancelled) setError("Failed to load courses.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -136,13 +123,24 @@ const ProgramsPage = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // "Start Program" goes to the course-selection flow, scoped to the clicked
-  // category so the next page shows the courses an admin assigned to it.
-  const handleStart = (categoryId: number) =>
-    navigate(`/programs/select?category_id=${categoryId}`);
+  // Course cards now route to the programs-for-course page first, so the
+  // student sees the programs an admin attached to this course (for their
+  // college) before landing on the details/player. The details page is still
+  // reachable from the "View More" CTA on each program card.
+  const handleStart = (slug: string) =>
+    navigate(`/courses/programs/for-course?slug=${encodeURIComponent(slug)}`);
   // "Continue" jumps the student straight back into the player exactly where
   // their enrolled course left off (path built by the backend from last_lesson_id).
   const handleContinue = (path: string) => navigate(path);
+
+  // Resolve a thumbnail URL. The list endpoint returns relative paths
+  // (e.g. uploads/course-thumbnail/...) — prepend the admin-service base.
+  const thumbUrl = (c: CourseCard) => {
+    const raw = c.thumbnail || c.banner || "";
+    if (!raw) return "";
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+    return `${ADMIN_BASE}/${raw.replace(/^\/+/, "")}`;
+  };
 
   return (
     <section className="section-padding bg-gradient-subtle">
@@ -176,33 +174,55 @@ const ProgramsPage = () => {
           </Card>
         )}
 
-        {!loading && !progressLoading && hasCollege === true && !error && categories.length === 0 && (
-          <p className="text-gray-600">No programs available yet.</p>
+        {!loading && !progressLoading && hasCollege === true && !error && courses.length === 0 && (
+          <p className="text-gray-600">No courses available for your college yet.</p>
         )}
 
         <div className="grid md:grid-cols-2 gap-6">
-          {!loading && !progressLoading && hasCollege === true && categories.map((program) => {
-            // Default to locked until the pre-assessment gate has been
-            // explicitly resolved as passed. While gatePassed is null
-            // (initial mount, network in flight) the button stays
-            // disabled — otherwise it briefly appears clickable, which
-            // let the student through before the gate check returned.
+          {!loading && !progressLoading && hasCollege === true && courses.map((course) => {
+            // Default to locked until the pre-assessment gate has resolved
+            // as passed. While gatePassed is null (initial mount, network in
+            // flight) the button stays disabled — otherwise it briefly
+            // appears clickable, letting the student through before the gate
+            // check returned.
             const locked = gatePassed !== true;
-            // Show "Continue" on the card whose program matches the enrolled
-            // target. Other cards keep "Start Program" — student can pick a
-            // different program later if the flow allows.
-            const isEnrolled = enrolledTarget?.program_id === program.id;
+            // Per-course enrolment isn't on this list payload, so we use the
+            // global enrolled target: if the student has an active enrolment,
+            // every card swaps to "Continue" and jumps back into the player.
+            const isEnrolled = enrolledTarget !== null;
+            const thumb = thumbUrl(course);
             return (
               <Card
-                key={program.id}
-                className="rounded-xl shadow-md hover:shadow-lg transition"
+                key={course.id}
+                className="rounded-xl shadow-md hover:shadow-lg transition overflow-hidden"
               >
+                {thumb && (
+                  <button
+                    type="button"
+                    onClick={
+                      locked
+                        ? undefined
+                        : isEnrolled
+                          ? () => handleContinue(enrolledTarget!.player_path)
+                          : () => handleStart(course.slug)
+                    }
+                    disabled={locked}
+                    className="block w-full aspect-video bg-gray-100 overflow-hidden disabled:cursor-not-allowed"
+                    aria-label={isEnrolled ? "Continue course" : "Open course"}
+                  >
+                    <img
+                      src={thumb}
+                      alt={course.title}
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                )}
                 <CardHeader>
                   <div className="flex items-center justify-between gap-3">
-                    <CardTitle className="text-[#177385]">{program.title}</CardTitle>
+                    <CardTitle className="text-[#177385]">{course.title}</CardTitle>
                     {/* Bare arrow — gated on pre-assessment. Disabled until
-                        `locked` flips false; starts the program, or jumps
-                        straight back into the player when already enrolled. */}
+                        `locked` flips false; opens the course details, or
+                        jumps straight back into the player when enrolled. */}
                     <button
                       type="button"
                       className={
@@ -215,47 +235,36 @@ const ProgramsPage = () => {
                           ? undefined
                           : isEnrolled
                             ? () => handleContinue(enrolledTarget!.player_path)
-                            : () => handleStart(program.id)
+                            : () => handleStart(course.slug)
                       }
                       disabled={locked}
-                      aria-label={isEnrolled ? "Continue program" : "Start program"}
-                      title={isEnrolled ? "Continue program" : "Start program"}
+                      aria-label={isEnrolled ? "Continue course" : "Open course"}
+                      title={isEnrolled ? "Continue course" : "Open course"}
                     >
                       <ArrowRight className="w-6 h-6" />
                     </button>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {program.description && (
-                    <p className="text-gray-600 mb-4">{program.description}</p>
+                  {course.short_description && (
+                    <p className="text-gray-600 mb-3 line-clamp-3">
+                      {course.short_description}
+                    </p>
                   )}
-
-                  {/* Course names an admin added to this category. */}
-                  {(() => {
-                    const courseNames = coursesByCategory[program.id] || [];
-                    if (courseNames.length === 0) {
-                      return (
-                        <p className="text-xs text-gray-400 mb-4">
-                          No courses added yet
-                        </p>
-                      );
-                    }
-                    return (
-                      <ul className="mb-4 space-y-1">
-                        {courseNames.map((name, idx) => (
-                          <li
-                            key={`${program.id}-${idx}`}
-                            className="text-sm text-gray-700 flex items-start gap-2"
-                          >
-                            <span className="text-[#177385] mt-0.5">•</span>
-                            <span className="font-semibold">{name}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    );
-                  })()}
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                    {course.level && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 capitalize">
+                        {course.level}
+                      </span>
+                    )}
+                    {course.language && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 capitalize">
+                        {course.language}
+                      </span>
+                    )}
+                  </div>
                   {locked && (
-                    <p className="text-xs text-gray-500 mt-2">
+                    <p className="text-xs text-gray-500 mt-3">
                       Complete Pre-Assessment to unlock
                     </p>
                   )}

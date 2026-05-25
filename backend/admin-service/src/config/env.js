@@ -27,6 +27,18 @@ module.exports = {
         port: process.env.DB_PORT,
         dialect: process.env.DB_DIALECT || 'mysql',
     },
+    // Read-only handle to assessment-service's DB. Holds the canonical
+    // PreAssessmentRegistration rows (selectedProgram, gender, college proof).
+    // Manage Students reads selectedProgram from here so the Program Interested
+    // column reflects the value the student submitted on the onboarding form.
+    assessmentDb: {
+        name: process.env.ASSESSMENT_DB_NAME || process.env.DB_NAME,
+        user: process.env.DB_USER,
+        pass: process.env.DB_PASS,
+        host: process.env.DB_HOST,
+        port: process.env.DB_PORT,
+        dialect: process.env.DB_DIALECT || 'mysql',
+    },
     mail: {
         host: process.env.SMTP_HOST,
         port: Number(process.env.SMTP_PORT || 587),

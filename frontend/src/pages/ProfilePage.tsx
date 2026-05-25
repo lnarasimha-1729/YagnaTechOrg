@@ -6,6 +6,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Calendar as CalendarPicker } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { format, parse, isValid } from "date-fns";
+import { cn } from "@/lib/utils";
 import {
   User,
   Mail,
@@ -26,6 +30,168 @@ interface ProfileFormData {
   yearOfStudy: string;
   college: string;
   programInterested: string;
+}
+
+// Date-of-Birth picker. Backend persists DOB as a DATEONLY column
+// (YYYY-MM-DD), so the picker's external value stays in that wire format and
+// only the rendered text is humanized. Year/month dropdowns make picking a
+// birth year practical without hammering the prev-month arrow.
+function DobPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const today = new Date();
+  const minDate = new Date(1900, 0, 1);
+
+  const parsed = value ? parse(value, "yyyy-MM-dd", new Date()) : null;
+  const selected = parsed && isValid(parsed) ? parsed : undefined;
+
+  // Friendly "27 years old" hint — only when a valid past date is set.
+  const ageHint = (() => {
+    if (!selected) return null;
+    const now = today;
+    let years = now.getFullYear() - selected.getFullYear();
+    const m = now.getMonth() - selected.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < selected.getDate())) years -= 1;
+    return years >= 0 && years < 130 ? `${years} years old` : null;
+  })();
+
+  return (
+    <Popover open={open} onOpenChange={(o) => !disabled && setOpen(o)}>
+      {/* Style the month/year <select> dropdowns rendered by
+          react-day-picker's caption_dropdowns layout. The shadcn Calendar
+          wrapper doesn't expose a className hook for these, so we scope
+          rules to .dob-popover and they don't leak elsewhere. */}
+      <style>{`
+        .dob-popover .rdp-dropdown {
+          appearance: none;
+          background-color: hsl(var(--background));
+          color: hsl(var(--foreground));
+          border: 1px solid hsl(var(--input));
+          border-radius: 0.375rem;
+          padding: 0.25rem 1.75rem 0.25rem 0.5rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23177385' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+          background-repeat: no-repeat;
+          background-position: right 0.5rem center;
+        }
+        .dob-popover .rdp-dropdown:focus {
+          outline: none;
+          border-color: #177385;
+          box-shadow: 0 0 0 2px rgba(23, 115, 133, 0.25);
+        }
+        .dob-popover .rdp-dropdown_year { min-width: 5rem; }
+        .dob-popover .rdp-dropdown_month { min-width: 7rem; }
+        .dob-popover .rdp-caption_dropdowns {
+          display: flex;
+          gap: 0.5rem;
+          justify-content: center;
+        }
+      `}</style>
+      <PopoverTrigger asChild disabled={disabled}>
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            "group relative flex h-11 w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm text-left transition-colors",
+            "hover:border-[#177385]/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#177385]/40 focus-visible:border-[#177385]",
+            "disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-input",
+            open && "border-[#177385] ring-2 ring-[#177385]/30"
+          )}
+          aria-label="Select date of birth"
+        >
+          <Calendar
+            className={cn(
+              "h-4 w-4 shrink-0 transition-colors",
+              selected ? "text-[#177385]" : "text-muted-foreground"
+            )}
+          />
+          <span
+            className={cn(
+              "flex-1 truncate",
+              !selected && "text-muted-foreground"
+            )}
+          >
+            {selected ? format(selected, "PPP") : "Select your date of birth"}
+          </span>
+          {ageHint && (
+            <span className="hidden sm:inline-block text-xs text-muted-foreground bg-[#177385]/10 text-[#177385] px-2 py-0.5 rounded-full">
+              {ageHint}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-auto p-3 rounded-lg shadow-lg border-border dob-popover"
+        align="start"
+        sideOffset={6}
+      >
+        <CalendarPicker
+          mode="single"
+          selected={selected}
+          onSelect={(d) => {
+            onChange(d ? format(d, "yyyy-MM-dd") : "");
+            if (d) setOpen(false);
+          }}
+          defaultMonth={selected ?? new Date(2000, 0, 1)}
+          disabled={(date) => date > today || date < minDate}
+          captionLayout="dropdown-buttons"
+          fromYear={1900}
+          toYear={today.getFullYear()}
+          initialFocus
+          className="p-0"
+          classNames={{
+            caption: "flex justify-center pt-1 pb-2 relative items-center",
+            caption_label: "hidden",
+            caption_dropdowns: "flex gap-2 items-center",
+            vhidden: "hidden",
+            nav: "space-x-1 flex items-center",
+            table: "w-full border-collapse",
+            head_row: "flex",
+            head_cell:
+              "text-muted-foreground rounded-md w-10 font-medium text-[0.75rem]",
+            row: "flex w-full mt-1",
+            cell: "h-10 w-10 text-center text-sm p-0 relative focus-within:relative focus-within:z-20",
+            day: "h-10 w-10 p-0 font-normal rounded-md hover:bg-[#177385]/10 aria-selected:opacity-100",
+            day_selected:
+              "bg-[#177385] text-white hover:bg-[#177385] hover:text-white focus:bg-[#177385] focus:text-white",
+            day_today:
+              "border border-[#177385]/60 text-[#177385] font-semibold",
+            day_outside: "text-muted-foreground/40",
+            day_disabled: "text-muted-foreground/30 cursor-not-allowed",
+          }}
+        />
+        <div className="flex items-center justify-between gap-2 pt-2 mt-1 border-t border-border/60">
+          <button
+            type="button"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground"
+            onClick={() => {
+              onChange("");
+              setOpen(false);
+            }}
+            disabled={!selected}
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            className="text-xs font-medium text-[#177385] hover:underline px-2 py-1"
+            onClick={() => setOpen(false)}
+          >
+            Done
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 const ProfilePage = () => {
@@ -299,10 +465,10 @@ const ProfilePage = () => {
               <Label className="flex items-center gap-2 text-gray-700">
                 <Calendar className="h-4 w-4 text-[#177385]" /> Date of Birth
               </Label>
-              <Input
+              <DobPicker
                 value={formData.dob}
-                onChange={(e) => handleInputChange('dob', e.target.value)}
                 disabled={!isEditing}
+                onChange={(v) => handleInputChange('dob', v)}
               />
             </CardContent>
           </Card>

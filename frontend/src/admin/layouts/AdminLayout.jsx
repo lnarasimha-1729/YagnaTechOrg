@@ -23,6 +23,8 @@ const ICONS = {
     course: <Icon d={<><path d="M4 5h12a3 3 0 0 1 3 3v11H7a3 3 0 0 1-3-3V5z" /><path d="M4 5v11a3 3 0 0 0 3 3" /></>} />,
     users: <Icon d={<><circle cx="9" cy="8" r="3.2" /><path d="M2.5 20c0-3.3 2.9-6 6.5-6s6.5 2.7 6.5 6" /><circle cx="17.5" cy="9.5" r="2.5" /><path d="M15 20c0-2.3 1.5-4 3.5-4s3 1.2 3.5 3" /></>} />,
     certificate: <Icon d={<><circle cx="12" cy="9" r="5" /><path d="M8.5 13 7 21l5-3 5 3-1.5-8" /></>} />,
+    assessment: <Icon d={<><path d="M9 4h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" /><path d="M9 9h6" /><path d="M9 13h6" /><path d="M9 17h3" /></>} />,
+    program: <Icon d={<><path d="M3 7l9-4 9 4-9 4-9-4z" /><path d="M3 7v6l9 4 9-4V7" /><path d="M12 11v10" /></>} />,
     college: <Icon d={<><path d="M3 21h18" /><path d="M5 21V8l7-4 7 4v13" /><path d="M9 21V12h6v9" /></>} />,
     settings: <Icon d={<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></>} />,
     chevron: <Icon className="ml-auto transition-transform" d={<path d="m6 9 6 6 6-6" />} />,
@@ -36,9 +38,22 @@ const ICONS = {
 // enforces that split — root admins should never see a college's data and
 // college admins should see only their dashboard.
 const MENU = [
-    { key: 'college', label: 'College Dashboard', icon: ICONS.college, to: '/admin/college', collegeOnly: true },
+    { key: 'college', label: 'Dashboard', icon: ICONS.college, to: '/admin/college', collegeOnly: true },
+    {
+        key: 'batches',
+        label: 'Batches',
+        icon: ICONS.users,
+        collegeOnly: true,
+        children: [
+            { label: 'Add Batch', to: '/admin/college?tab=add-batch' },
+            { label: 'Manage Batches', to: '/admin/college?tab=manage-batches' },
+        ],
+    },
     { key: 'dashboard', label: 'Dashboard', icon: ICONS.dashboard, to: '/admin/dashboard' },
-    { key: 'category', label: 'Category', icon: ICONS.category, to: '/admin/categories' },
+    // Category sidebar entry removed — course grouping is now driven by the
+    // `clg_ids` JSON column written from the course form (CollegeMultiSelect).
+    // The /admin/categories route still exists in App.tsx for direct access,
+    // but it's no longer surfaced in navigation.
     {
         key: 'course',
         label: 'Course',
@@ -47,6 +62,25 @@ const MENU = [
             { label: 'Manage Courses', to: '/admin/courses' },
             { label: 'Add New Course', to: '/admin/course/create' },
             { label: 'Coupons', to: '/admin/coupons' },
+        ],
+    },
+    {
+        key: 'assessment',
+        label: 'Assessments',
+        icon: ICONS.assessment,
+        children: [
+            { label: 'Manage Assessments', to: '/admin/assessments' },
+            { label: 'Question Sets', to: '/admin/assessments?tab=question-sets' },
+            { label: 'Questions', to: '/admin/assessments?tab=questions' },
+        ],
+    },
+    {
+        key: 'program',
+        label: 'Programs',
+        icon: ICONS.program,
+        children: [
+            { label: 'Manage Programs', to: '/admin/programs' },
+            { label: 'Add New Program', to: '/admin/programs/create' },
         ],
     },
     {
@@ -111,22 +145,42 @@ const MENU = [
     },
 ];
 
-function isGroupActive(group, pathname) {
+function isGroupActive(group, pathname, search = '') {
     // Use boundary-aware match so /admin/college doesn't claim /admin/colleges
-    // (and vice versa). Exact match OR `to` followed by a `/` segment.
-    if (group.to && (pathname === group.to || pathname.startsWith(group.to + '/'))) return true;
-    if (group.children) return group.children.some((c) => isGroupActive(c, pathname));
+    // (and vice versa). Exact match OR `to` followed by a `/` segment. When the
+    // leaf carries a query string (e.g. `?tab=add-batch`), also require the
+    // query to match so deep-linked siblings don't all light up.
+    if (group.to) {
+        const [toPath, toQuery = ''] = group.to.split('?');
+        if (pathname === toPath || pathname.startsWith(toPath + '/')) {
+            if (!toQuery) return true;
+            const cur = new URLSearchParams(search);
+            const target = new URLSearchParams(toQuery);
+            const matches = [...target.entries()].every(([k, v]) => cur.get(k) === v);
+            if (matches) return true;
+        }
+    }
+    if (group.children) return group.children.some((c) => isGroupActive(c, pathname, search));
     if (group.key === 'course') {
         return pathname.startsWith('/admin/course');
     }
     if (group.key === 'certificate') {
         return pathname.startsWith('/admin/certificate');
     }
+    if (group.key === 'program') {
+        return pathname.startsWith('/admin/programs');
+    }
+    if (group.key === 'assessment') {
+        return pathname.startsWith('/admin/assessments');
+    }
+    // Note: `batches` is a children-only group, so the recursion above
+    // already lights it up whenever any child's pathname+query matches
+    // (see the renderChild matchesLeaf wiring). No special case needed.
     return false;
 }
 
 export default function AdminLayout() {
-    const { pathname } = useLocation();
+    const { pathname, search } = useLocation();
     const navigate = useNavigate();
     // Read localStorage once per mount. getStoredUser() does JSON.parse, which
     // returns a fresh object every call — referencing it inline on every
@@ -196,7 +250,7 @@ export default function AdminLayout() {
         items.forEach((m) => {
             if (!m.children) return;
             const key = parentKey ? `${parentKey}.${m.key || m.label}` : (m.key || m.label);
-            if (isGroupActive(m, pathname)) initiallyOpen[key] = true;
+            if (isGroupActive(m, pathname, search)) initiallyOpen[key] = true;
             collectInitiallyOpen(m.children, key);
         });
     };
@@ -208,20 +262,10 @@ export default function AdminLayout() {
     // font-semibold is on the base class so every sidebar item — active or
     // not — renders semibold. Active state still gets the skin color; the
     // weight stays consistent so navigation feels uniform.
-    const subLinkCls = ({ isActive }) =>
-        `block pl-[42px] pr-3 py-[7px] text-[13px] font-semibold rounded-ol-8 transition-colors ${
-            isActive ? 'text-skin' : 'text-gray hover:text-dark'
-        }`;
-
-    const nestedLinkCls = ({ isActive }) =>
-        `block pl-[60px] pr-3 py-[6px] text-[13px] font-semibold rounded-ol-8 transition-colors ${
-            isActive ? 'text-skin' : 'text-gray hover:text-dark'
-        }`;
-
     const renderChild = (c, parentKey) => {
         if (c.children) {
             const subKey = `${parentKey}.${c.key || c.label}`;
-            const subActive = isGroupActive(c, pathname);
+            const subActive = isGroupActive(c, pathname, search);
             const subOpen = open[subKey];
             return (
                 <li key={subKey} className="relative">
@@ -245,7 +289,11 @@ export default function AdminLayout() {
                         <ul className="mt-1 mb-1 list-none p-0 flex flex-col gap-[2px]">
                             {c.children.map((leaf) => (
                                 <li key={leaf.to}>
-                                    <NavLink to={leaf.to} className={nestedLinkCls} end>
+                                    <NavLink
+                                        to={leaf.to}
+                                        className={nestedLinkClsFor(leaf.to, pathname, search)}
+                                        end
+                                    >
                                         {leaf.label}
                                     </NavLink>
                                 </li>
@@ -257,7 +305,11 @@ export default function AdminLayout() {
         }
         return (
             <li key={c.to} className="relative">
-                <NavLink to={c.to} className={subLinkCls} end>
+                <NavLink
+                    to={c.to}
+                    className={subLinkClsFor(c.to, pathname, search)}
+                    end
+                >
                     <span className="inline-flex items-center gap-2">
                         <span className="w-[6px] h-[6px] rounded-full bg-current opacity-60" />
                         {c.label}
@@ -266,6 +318,33 @@ export default function AdminLayout() {
             </li>
         );
     };
+
+    // For sidebar leaves whose `to` includes a query string (e.g. Assessments
+    // sub-tabs use `?tab=questions`), NavLink's default isActive only matches
+    // by pathname — so all three would highlight at once. These helpers do a
+    // pathname + query-string compare so the correct tab lights up.
+    const matchesLeaf = (leafTo, p, s) => {
+        const [leafPath, leafQuery = ''] = leafTo.split('?');
+        if (leafPath !== p) return false;
+        const current = new URLSearchParams(s);
+        const target = new URLSearchParams(leafQuery);
+        if ([...target.keys()].length === 0) {
+            // The "default tab" entry has no query — active only when no tab=
+            return !current.get('tab');
+        }
+        for (const [k, v] of target.entries()) {
+            if (current.get(k) !== v) return false;
+        }
+        return true;
+    };
+    const subLinkClsFor = (leafTo, p, s) => () =>
+        `block pl-[42px] pr-3 py-[7px] text-[13px] font-semibold rounded-ol-8 transition-colors ${
+            matchesLeaf(leafTo, p, s) ? 'text-skin' : 'text-gray hover:text-dark'
+        }`;
+    const nestedLinkClsFor = (leafTo, p, s) => () =>
+        `block pl-[60px] pr-3 py-[6px] text-[13px] font-semibold rounded-ol-8 transition-colors ${
+            matchesLeaf(leafTo, p, s) ? 'text-skin' : 'text-gray hover:text-dark'
+        }`;
 
     const topLinkCls = ({ isActive }) =>
         `flex items-center gap-3 px-3 py-[10px] rounded-ol-8 text-[14px] font-semibold transition-colors ${
@@ -283,14 +362,29 @@ export default function AdminLayout() {
                             {(() => {
                                 const renderItem = (item) => {
                                     if (!item.children) {
+                                        // Let the icon inherit color from the NavLink so it
+                                        // flips to text-skin alongside the label when active
+                                        // (Icon uses stroke="currentColor"). Without this the
+                                        // hardcoded text-gray kept the icon grey on /admin/dashboard
+                                        // and /admin/categories.
+                                        //
+                                        // College Dashboard shares its pathname with the Batches
+                                        // sub-tabs (`/admin/college?tab=…`). Plain NavLink would
+                                        // highlight the Dashboard link AND the Batches group
+                                        // whenever a batch tab is active. Use the query-aware
+                                        // matchesLeaf so Dashboard only lights up on the bare
+                                        // pathname (no `tab` param).
+                                        const cls = item.to.includes('?') || ['/admin/college'].includes(item.to)
+                                            ? () => topLinkCls({ isActive: matchesLeaf(item.to, pathname, search) })
+                                            : topLinkCls;
                                         return (
-                                            <NavLink key={item.key} to={item.to} className={topLinkCls} end>
-                                                <span className="text-gray">{item.icon}</span>
+                                            <NavLink key={item.key} to={item.to} className={cls} end>
+                                                {item.icon}
                                                 <span>{item.label}</span>
                                             </NavLink>
                                         );
                                     }
-                                    const active = isGroupActive(item, pathname);
+                                    const active = isGroupActive(item, pathname, search);
                                     const isOpen = open[item.key];
                                     return (
                                         <div key={item.key}>

@@ -1,18 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import { createMeta, storeCourse } from '../../api/course';
+import { storeCourse } from '../../api/course';
 import { listInstructors } from '../../api/instructor';
 import { listLanguages } from '../../api/language';
-
-const flatCats = (tree) => {
-    const flat = [];
-    tree.forEach((p) => {
-        flat.push({ id: p.id, title: p.title, depth: 0 });
-        p.childs?.forEach((c) => flat.push({ id: c.id, title: c.title, depth: 1 }));
-    });
-    return flat;
-};
+import CollegeMultiSelect from '../../components/CollegeMultiSelect';
 
 const STATUS_RADIOS = [
     { id: 'status_active', value: 'active', label: 'Active', color: 'text-success', ring: 'focus:ring-success' },
@@ -42,13 +34,12 @@ function Radio({ id, name, value, checked, onChange, label }) {
 
 export default function CourseCreate() {
     const nav = useNavigate();
-    const [cats, setCats] = useState([]);
     const [form, setForm] = useState({
         title: '',
         short_description: '',
         description: '',
         status: 'active',
-        category_id: '',
+        // category_id removed — courses are mapped to colleges via clg_ids.
         level: '',
         language: '',
         is_paid: '1',
@@ -58,6 +49,10 @@ export default function CourseCreate() {
         expiry_period: 'lifetime',
         number_of_month: '',
         enable_drip_content: '0',
+        // '1' when this course grants a certificate on completion, '0' when
+        // it doesn't. Drives the "Certificate" badge on the public course
+        // details page. Defaults to '1' to preserve the prior always-on UX.
+        has_certificate: '1',
         // Auth-service userId of the instructor selected from the dropdown.
         // Sent as instructors[] on submit so the backend stores it in
         // course.instructor_ids (CourseService.create line 181).
@@ -65,6 +60,10 @@ export default function CourseCreate() {
     });
     const [thumbnail, setThumbnail] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+    // Colleges this course is offered at. Mirrors the Category form's
+    // mandatory-multi-select pattern so cross-entity college filtering is
+    // consistent. Sent as clgIds[] on submit.
+    const [selectedClgIds, setSelectedClgIds] = useState([]);
 
     // Instructor dropdown source — admin instructors API
     // (GET /api/admin/manage/instructors). Loaded once on mount; small list,
@@ -90,9 +89,6 @@ export default function CourseCreate() {
     };
 
     useEffect(() => {
-        createMeta()
-            .then((r) => setCats(flatCats(r.categories || [])))
-            .catch(() => setCats([]));
         loadInstructors();
         setLanguagesLoading(true);
         listLanguages()
@@ -109,6 +105,10 @@ export default function CourseCreate() {
             toast.error('Please select an instructor');
             return;
         }
+        if (selectedClgIds.length === 0) {
+            toast.error('Select at least one college');
+            return;
+        }
         setSubmitting(true);
         const fd = new FormData();
         // instructor_id is the form-state key; we send it on the wire as
@@ -120,6 +120,7 @@ export default function CourseCreate() {
         });
         fd.append('course_type', 'general');
         fd.append('instructors[]', form.instructor_id);
+        selectedClgIds.forEach((id) => fd.append('clgIds[]', id));
         if (thumbnail) fd.append('thumbnail', thumbnail);
 
         try {
@@ -216,27 +217,6 @@ export default function CourseCreate() {
                         {/* Right column */}
                         <div>
                             <div className="mb-3">
-                                <label className="ol-form-label" htmlFor="category_id">
-                                    Category<span className="text-danger ml-1">*</span>
-                                </label>
-                                <select
-                                    id="category_id"
-                                    className="ol-form-control"
-                                    name="category_id"
-                                    required
-                                    value={form.category_id}
-                                    onChange={(e) => set('category_id', e.target.value)}
-                                >
-                                    <option value="">Select a category</option>
-                                    {cats.map((c) => (
-                                        <option key={c.id} value={c.id}>
-                                            {c.depth ? '-- ' : ''}{c.title}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="mb-3">
                                 <label className="ol-form-label" htmlFor="level">
                                     Course level<span className="text-danger ml-1">*</span>
                                 </label>
@@ -332,6 +312,14 @@ export default function CourseCreate() {
                                         </button>
                                     </div>
                                 )}
+                            </div>
+
+                            <div className="mb-3">
+                                <CollegeMultiSelect
+                                    value={selectedClgIds}
+                                    onChange={setSelectedClgIds}
+                                    required
+                                />
                             </div>
 
                             <div className="mb-3">
@@ -468,6 +456,30 @@ export default function CourseCreate() {
                                         checked={form.enable_drip_content === '1'}
                                         onChange={() => set('enable_drip_content', '1')}
                                         label="On"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="mb-3">
+                                <label className="ol-form-label">
+                                    Provides certificate
+                                </label>
+                                <div className="flex flex-wrap gap-x-5 gap-y-2">
+                                    <Radio
+                                        id="cert_yes"
+                                        name="has_certificate"
+                                        value="1"
+                                        checked={form.has_certificate === '1'}
+                                        onChange={() => set('has_certificate', '1')}
+                                        label="Yes"
+                                    />
+                                    <Radio
+                                        id="cert_no"
+                                        name="has_certificate"
+                                        value="0"
+                                        checked={form.has_certificate === '0'}
+                                        onChange={() => set('has_certificate', '0')}
+                                        label="No"
                                     />
                                 </div>
                             </div>

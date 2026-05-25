@@ -138,6 +138,9 @@ export const updatePreScore = (data: {
 export const updatePostScore = (data: {
   userId: string;
   postScore: number;
+  // Seconds the student spent on the post-assessment (timer start → submit).
+  // Optional so legacy callers still compile; backend ignores when absent.
+  postScoreDuration?: number;
 }) => {
   return axiosInstance.put("/auth/profile/postscore", data);
 };

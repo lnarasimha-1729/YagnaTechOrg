@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { getCourse, updateCourse } from '../../api/course';
-import { listCategories } from '../../api/category';
 import { getStoredUser } from '../../api/auth';
 import BasicTab from './tabs/BasicTab';
 import PricingTab from './tabs/PricingTab';
@@ -42,7 +41,6 @@ const COURSE_FORM_ID = 'admin-course-edit-form';
 export default function CourseEdit() {
     const { id } = useParams();
     const [course, setCourse] = useState(null);
-    const [categories, setCategories] = useState([]);
 
     // Instructors only get the Curriculum and Live Class tabs — the rest are
     // admin-only. Read role once per mount; AdminLayout already enforced that
@@ -63,7 +61,6 @@ export default function CourseEdit() {
     };
 
     useEffect(() => { load(); }, [id]);
-    useEffect(() => { listCategories().then((r) => setCategories(r.categories)); }, []);
 
     const onSave = async (fd) => {
         fd.append('tab', tab);
@@ -161,7 +158,7 @@ export default function CourseEdit() {
 
                         {/* Content */}
                         <div className="tab-content w-full flex-1">
-                            {tab === 'basic' && <BasicTab course={course} categories={categories} onSave={onSave} formId={COURSE_FORM_ID} />}
+                            {tab === 'basic' && <BasicTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}
                             {tab === 'pricing' && <PricingTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}
                             {tab === 'info' && <InfoTab course={course} onSave={onSave} formId={COURSE_FORM_ID} />}
                             {tab === 'curriculum' && <CurriculumTab course={course} />}

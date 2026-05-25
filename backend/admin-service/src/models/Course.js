@@ -35,6 +35,10 @@ module.exports = (sequelize) => {
         clg_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
         average_rating: { type: DataTypes.FLOAT, defaultValue: 0 },
         expiry_period: { type: DataTypes.INTEGER, allowNull: true },
+        // Whether completion of this course grants a certificate. Surfaced on
+        // the public course-details page (the "Includes certificate" line) and
+        // gates the certificate-issue flow.
+        has_certificate: { type: DataTypes.BOOLEAN, defaultValue: true },
     }, { tableName: 'courses', timestamps: true, createdAt: 'created_at', updatedAt: 'updated_at' });
 
     Course.associate = (models) => {

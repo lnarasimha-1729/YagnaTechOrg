@@ -114,6 +114,13 @@ const User = sequelize.define('User', {
   postScore: {
     type : INTEGER
   },
+  // Seconds the student spent on the post-assessment (timer start → submit).
+  // Mirrors preScoreDuration. The admin-service adds the underlying column
+  // on startup if it's missing, so this works without a manual migration.
+  postScoreDuration: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
   refreshToken: {  
     type: DataTypes.STRING(1024),
     allowNull: true

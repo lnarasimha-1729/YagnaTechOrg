@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { API_BASE } from '../../api/client';
+import { listColleges } from '../../api/college';
 
 // Mirrors AdminForm / InstructorForm: tabbed sidebar (Basic / Login
-// Credentials), grid-cols-12 rows, same controls. Intentionally narrower
-// than AdminForm — students live in the auth-service users table, which
-// doesn't have columns for about/college_id/social, so we don't expose
-// fields that would silently be dropped by StudentService.update.
+// Credentials), grid-cols-12 rows, same controls. Narrower than AdminForm —
+// students live in the auth-service users table, so only fields with a
+// matching column there are exposed (name/phone/email/password/collegeId).
 const TABS = [
     { key: 'basic', label: 'Basic' },
     { key: 'login', label: 'Login Credentials' },
@@ -18,9 +18,21 @@ export default function StudentForm({ student, onSubmit, submitLabel = 'Save' })
         phone: student?.phone || '',
         email: student?.email || '',
         password: '',
+        collegeId: student?.collegeId || '',
     });
     const [photo, setPhoto] = useState(null);
     const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+
+    // College dropdown options sourced from the canonical /colleges endpoint
+    // (same list the Manage Colleges page shows). Fetched once on mount.
+    const [colleges, setColleges] = useState([]);
+    useEffect(() => {
+        let alive = true;
+        listColleges({ per_page: 1000 })
+            .then((r) => { if (alive) setColleges(r?.colleges || []); })
+            .catch(() => { if (alive) setColleges([]); });
+        return () => { alive = false; };
+    }, []);
 
     const submit = (e) => {
         e.preventDefault();
@@ -83,6 +95,23 @@ export default function StudentForm({ student, onSubmit, submitLabel = 'Save' })
                                 <label className="col-span-2 ol-form-label">Phone</label>
                                 <div className="col-span-10">
                                     <input className="ol-form-control" value={f.phone} onChange={(e) => set('phone', e.target.value)} />
+                                </div>
+                            </div>
+                            <div className="mb-3 grid grid-cols-12 gap-0">
+                                <label className="col-span-2 ol-form-label">College</label>
+                                <div className="col-span-10">
+                                    <select
+                                        className="ol-form-control"
+                                        value={f.collegeId}
+                                        onChange={(e) => set('collegeId', e.target.value)}
+                                    >
+                                        <option value="">— Not assigned —</option>
+                                        {colleges.map((c) => (
+                                            <option key={c.clgId} value={c.clgId}>
+                                                {c.clgName}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
                             <div className="mb-3 grid grid-cols-12 gap-0">

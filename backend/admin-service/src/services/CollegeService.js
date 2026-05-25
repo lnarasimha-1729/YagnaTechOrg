@@ -1,6 +1,7 @@
-const { Op, QueryTypes } = require('sequelize');
+const { Op, QueryTypes, fn, col } = require('sequelize');
 const authDb = require('../config/authDatabase');
 const College = require('../models/College');
+const { Batch } = require('../models');
 const { HttpError } = require('../middlewares/error');
 
 // Verify the caller-supplied orgId exists in lucy_devdb.organisations before
@@ -45,8 +46,34 @@ const list = async ({ page = 1, per_page = 10, search = '' } = {}) => {
             order: [['clgName', 'ASC']],
             attributes: ['clgId', 'clgName', 'clgAddress', 'orgId', 'branchIds', 'createdAt', 'updatedAt'],
         });
+
+        // Batch counts live in the admin DB (batches.clg_id), so we tally
+        // them separately and merge by clgId. Best-effort — a DB miss just
+        // shows 0 in the column.
+        const clgIds = rows.map((r) => r.clgId).filter(Boolean);
+        let batchCountByClg = {};
+        if (clgIds.length) {
+            try {
+                const counts = await Batch.findAll({
+                    where: { clg_id: clgIds },
+                    attributes: ['clg_id', [fn('COUNT', col('id')), 'count']],
+                    group: ['clg_id'],
+                    raw: true,
+                });
+                batchCountByClg = counts.reduce((acc, c) => {
+                    acc[c.clg_id] = Number(c.count) || 0;
+                    return acc;
+                }, {});
+            } catch (err) {
+                console.warn('[colleges] batch count lookup failed:', err.message);
+            }
+        }
+
         return {
-            colleges: rows.map((r) => r.toJSON()),
+            colleges: rows.map((r) => ({
+                ...r.toJSON(),
+                batches_count: batchCountByClg[r.clgId] || 0,
+            })),
             total: count,
             page: Number(page),
             per_page: limit,

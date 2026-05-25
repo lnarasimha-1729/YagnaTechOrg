@@ -180,9 +180,8 @@ export default function CategoryIndex() {
                         <h6 className="text-[14px] font-semibold text-dark mb-2 flex items-center px-3 pt-3 m-0">
                             <i className={`${cat.icon} mr-1`} />
                             <span className="truncate">{cat.title}</span>
-                            <span className="text-muted font-normal ml-2">({cat.childs?.length || 0})</span>
-                            {/* Edit / Delete sit immediately after the title (and the child-count
-                                pill) on the same row. Using react-icons/fa instead of the project's
+                            {/* Edit / Delete sit immediately after the title on
+                                the same row. Using react-icons/fa instead of the project's
                                 "fi fi-rr-*" classes — those reference Flowbite Uicons which is not
                                 imported anywhere, so every <i className="fi fi-rr-..."/> across the
                                 admin renders an empty box. react-icons is already a dependency. */}

@@ -1,5 +1,21 @@
 import QuizPlayer from './QuizPlayer';
 
+// Same env var the rest of the app uses (Home/Overview/Programspage). System
+// videos and uploaded documents are persisted as RELATIVE paths
+// ("uploads/lesson_file/videos/foo.mp4") by CurriculumService, so they need
+// the admin-service origin prepended before they're resolvable in <video>.
+const ADMIN_BASE = (import.meta.env.VITE_ADMIN_API_URL) || 'http://localhost:4000';
+
+// Build a playable URL for a stored upload. Absolute URLs (http://, https://,
+// blob:, data:) pass through unchanged so YouTube/Vimeo/Drive embeds keep
+// working; everything else gets joined onto ADMIN_BASE.
+const resolveUploadUrl = (src) => {
+    const s = String(src || '').trim();
+    if (!s) return s;
+    if (/^(https?:|blob:|data:)/i.test(s)) return s;
+    return `${ADMIN_BASE.replace(/\/$/, '')}/${s.replace(/^\/+/, '')}`;
+};
+
 const LessonTypeIcon = ({ type }) => {
     if (['video-url', 'system-video', 'vimeo-url', 'html5'].includes(type)) return <i className="fa fa-video" />;
     if (type === 'image') return <i className="fa fa-image" />;
@@ -83,6 +99,10 @@ function LessonRenderer({ lesson, course, onLessonEnded, onTimeUpdate }) {
     }
 
     if (t === 'system-video' || t === 'html5') {
+        // system-video is a file uploaded via the admin and stored as a
+        // RELATIVE upload path; html5 is a direct .mp4 URL the admin typed
+        // (already absolute). resolveUploadUrl handles both.
+        const videoUrl = resolveUploadUrl(lesson.lesson_src);
         return (
             <video
                 key={lesson.id}
@@ -93,7 +113,7 @@ function LessonRenderer({ lesson, course, onLessonEnded, onTimeUpdate }) {
                 onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
                 className="w-full max-h-[80vh] bg-black"
             >
-                <source src={lesson.lesson_src} type="video/mp4" />
+                <source src={videoUrl} type="video/mp4" />
             </video>
         );
     }
@@ -129,15 +149,18 @@ function LessonRenderer({ lesson, course, onLessonEnded, onTimeUpdate }) {
     }
 
     if (t === 'image') {
-        return <img src={lesson.attachment || lesson.lesson_src} alt={lesson.title} className="w-full max-h-[80vh] object-contain bg-black" />;
+        const imgUrl = resolveUploadUrl(lesson.attachment || lesson.lesson_src);
+        return <img src={imgUrl} alt={lesson.title} className="w-full max-h-[80vh] object-contain bg-black" />;
     }
 
     if (t === 'document_type') {
-        const src = lesson.lesson_src || lesson.attachment;
+        const src = resolveUploadUrl(lesson.lesson_src || lesson.attachment);
         if (lesson.attachment_type === 'pdf') {
             return <iframe src={src} className="w-full h-[80vh] bg-white" title={lesson.title} />;
         }
         if (['doc', 'ppt'].includes(lesson.attachment_type)) {
+            // Office viewer needs an ABSOLUTE, publicly reachable URL — passing
+            // a relative path here would render an error page inside the iframe.
             return (
                 <iframe
                     src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(src)}`}

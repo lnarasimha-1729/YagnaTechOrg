@@ -209,7 +209,12 @@ export default function StudentIndex() {
                                             <th scope="col">Name</th>
                                             <th scope="col">Phone</th>
                                             <th scope="col">College</th>
+                                            <th scope="col">Enrolled Courses</th>
+                                            <th scope="col">Program Interested</th>
+                                            <th scope="col">Batch</th>
                                             <th scope="col">Pre-Assessment</th>
+                                            <th scope="col">Post-Assessment</th>
+                                            <th scope="col">Certificate Status</th>
                                             <th scope="col">Program Request</th>
                                             <th scope="col">Request Status</th>
                                             <th scope="col">Options</th>
@@ -236,6 +241,23 @@ export default function StudentIndex() {
                                                 <td>
                                                     <p className="m-0">{s.college || <span className="text-gray">Not selected</span>}</p>
                                                 </td>
+                                                <td className="min-w-[180px]">
+                                                    <EnrolledCoursesCell courses={s.enrolled_courses} />
+                                                </td>
+                                                <td className="min-w-[160px]">
+                                                    {s.program_interested ? (
+                                                        <span className="text-[13px]">{s.program_interested}</span>
+                                                    ) : (
+                                                        <span className="text-[12px] text-gray">Not selected</span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    {s.batch ? (
+                                                        <span className="text-[13px]">{s.batch}</span>
+                                                    ) : (
+                                                        <span className="text-[12px] text-gray">—</span>
+                                                    )}
+                                                </td>
                                                 <td className="min-w-[160px]">
                                                     {s.pre_assessment ? (
                                                         <div>
@@ -255,6 +277,29 @@ export default function StudentIndex() {
                                                     ) : (
                                                         <span className="text-[12px] text-gray">Not taken</span>
                                                     )}
+                                                </td>
+                                                <td className="min-w-[160px]">
+                                                    {s.post_assessment ? (
+                                                        <div>
+                                                            <span
+                                                                className={`text-[13px] font-semibold ${
+                                                                    s.post_assessment.passed
+                                                                        ? 'text-green-600'
+                                                                        : 'text-red-600'
+                                                                }`}
+                                                            >
+                                                                Score: {s.post_assessment.score}
+                                                            </span>
+                                                            <p className="text-[11px] text-gray m-0 mt-1">
+                                                                Time taken: {fmtDuration(s.post_assessment.duration_seconds)}
+                                                            </p>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[12px] text-gray">Not taken</span>
+                                                    )}
+                                                </td>
+                                                <td className="min-w-[140px]">
+                                                    <CertificateStatusBadge cert={s.certificate} />
                                                 </td>
                                                 <td className="min-w-[260px]">
                                                     <ProgramRequestCell student={s} />
@@ -433,6 +478,66 @@ const PROGRAM_OPTIONS = [
     'AI Frontier Plus Program',
     'Elite AI Residency',
 ];
+
+// Enrolled courses chip strip. Shows up to two chips inline; the rest collapse
+// into a "+N more" pill with a tooltip listing the overflow titles. Empty
+// enrolment → small "None" placeholder so the column doesn't look broken.
+function EnrolledCoursesCell({ courses }) {
+    const rows = Array.isArray(courses) ? courses : [];
+    if (rows.length === 0) {
+        return <span className="text-[12px] text-gray">None</span>;
+    }
+    const MAX = 2;
+    const visible = rows.slice(0, MAX);
+    const hidden = rows.slice(MAX);
+    return (
+        <div className="flex flex-wrap items-center gap-1">
+            {visible.map((c) => (
+                <span
+                    key={c.id}
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] max-w-[160px] truncate"
+                    title={c.title}
+                >
+                    {c.title}
+                </span>
+            ))}
+            {hidden.length > 0 && (
+                <span
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px]"
+                    title={hidden.map((h) => h.title).join(', ')}
+                >
+                    +{hidden.length} more
+                </span>
+            )}
+        </div>
+    );
+}
+
+// Certificate status pill — "Issued" (green) when at least one active
+// certificate exists for the student, "Not issued" (gray) otherwise. Shows
+// the per-student count when more than one, plus the latest issue date.
+function CertificateStatusBadge({ cert }) {
+    if (!cert || !cert.issued) {
+        return (
+            <span className="inline-block px-2 py-0.5 rounded text-[12px] font-semibold bg-gray-100 text-gray-600">
+                Not issued
+            </span>
+        );
+    }
+    const issuedAt = cert.latest_issued_at
+        ? new Date(cert.latest_issued_at).toLocaleDateString()
+        : '';
+    return (
+        <div>
+            <span className="inline-block px-2 py-0.5 rounded text-[12px] font-semibold bg-green-100 text-green-700">
+                Issued{cert.count > 1 ? ` × ${cert.count}` : ''}
+            </span>
+            {issuedAt && (
+                <p className="text-[11px] text-gray m-0 mt-1">{issuedAt}</p>
+            )}
+        </div>
+    );
+}
 
 // Status of the program request an admin sent the student. Driven by
 // program_requests.status (joined into the student list as

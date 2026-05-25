@@ -7,7 +7,7 @@ const lessonRepo = require('../repositories/LessonRepository');
 const seoRepo = require('../repositories/SeoFieldRepository');
 const questionRepo = require('../repositories/QuestionRepository');
 const submissionRepo = require('../repositories/QuizSubmissionRepository');
-const { Lesson, Section, User, Category } = require('../models');
+const { Lesson, Section, User, Category, UserProgress } = require('../models');
 const slugify = require('../helpers/slugify');
 const { upload, removeFile, niceFileName } = require('../helpers/fileUploader');
 const mailer = require('../helpers/mailer');
@@ -22,6 +22,28 @@ const DEFAULT_DRIP = JSON.stringify({
 
 const filterEmpty = (arr) =>
     Array.isArray(arr) ? arr.filter((v) => v !== null && v !== undefined && v !== '') : [];
+
+// clgIds can arrive as `clgIds[]=a&clgIds[]=b` (multi-value multipart fields,
+// parsed as an array), as a single string `clgIds=a`, or as already-coerced
+// `clgIds[]` array. Mirrors CategoryService.normalizeClgIds so the storage
+// shape is identical for both entities.
+const normalizeClgIds = (raw) => {
+    if (raw == null) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return Array.from(new Set(arr.map((v) => String(v).trim()).filter(Boolean)));
+};
+
+// Multipart form values arrive as strings. Treat '1'/'true'/'on' (case-insensitive)
+// as true and '0'/'false'/'' as false. Booleans pass through. Used for the
+// per-course has_certificate toggle and similar flags.
+const toBool = (v, fallback = false) => {
+    if (v === undefined || v === null || v === '') return fallback;
+    if (typeof v === 'boolean') return v;
+    const s = String(v).trim().toLowerCase();
+    if (['1', 'true', 'on', 'yes'].includes(s)) return true;
+    if (['0', 'false', 'off', 'no'].includes(s)) return false;
+    return fallback;
+};
 
 // Build the Sequelize `where` fragment that scopes a query to an instructor's
 // own courses (they own the row OR appear in instructor_ids). Returns null for
@@ -94,6 +116,7 @@ const emptyResponse = (query = {}) => ({
     status: query.status || 'all',
     instructor: query.instructor || 'all',
     price: query.price || 'all',
+    college: query.college || 'all',
     courses: { data: [], total: 0, per_page: 20, current_page: Number(query.page) || 1, last_page: 1 },
     pending_courses: 0,
     active_courses: 0,
@@ -112,22 +135,20 @@ const list = async (query, user = null) => {
 };
 
 const dbList = async (query, user = null) => {
-    const { category, search, price, instructor, status, page = 1 } = query;
+    const { college, search, price, instructor, status, page = 1 } = query;
     const where = {};
     const parent = {};
 
-    if (category && category !== 'all') {
-        const cat = await categoryRepo.findBySlug(category);
-        if (cat) {
-            if (cat.parent_id) {
-                parent.child_cat = category;
-                where.category_id = cat.id;
-            } else {
-                const subs = await categoryRepo.findChildrenIds(cat.id);
-                where.category_id = { [Op.in]: [cat.id, ...subs] };
-                parent.parent_cat = category;
-            }
-        }
+    // Course grouping is now college-driven (courses.clg_ids JSON column),
+    // not category-driven. `college` here is a clgId string sent by the
+    // Manage Courses filter; an absent value means "show all colleges".
+    if (college && college !== 'all') {
+        const escapedClgId = Course.sequelize.escape(JSON.stringify(String(college)));
+        where[Op.and] = [
+            ...(Array.isArray(where[Op.and]) ? where[Op.and] : []),
+            Course.sequelize.literal(`JSON_CONTAINS(\`Course\`.\`clg_ids\`, ${escapedClgId})`),
+        ];
+        parent.college = college;
     }
     if (search) where.title = { [Op.like]: `%${search}%` };
     if (price && price !== 'all') where.is_paid = price === 'paid' ? 1 : price === 'free' ? 0 : 2;
@@ -154,14 +175,19 @@ const dbList = async (query, user = null) => {
         order: [['id', 'DESC']],
         limit,
         offset,
+        // Category include removed — courses are no longer grouped by category.
+        // The clg_ids JSON column on the courses table drives grouping; the
+        // admin UI resolves clgId → clgName client-side via useCollege().
         include: [
             { model: User, as: 'creator', attributes: ['id', 'name', 'email', 'photo'] },
-            { model: Category, attributes: ['id', 'title', 'slug'] },
         ],
     });
 
     const courseIds = rows.map((r) => r.id);
-    const [lessonCounts, sectionCounts] = await Promise.all([
+    // Enrollment lives in user_progress.enrolled — same source the dashboard
+    // uses (see DashboardService.stats), so the per-course count here stays
+    // consistent with the global enrollment_count stat.
+    const [lessonCounts, sectionCounts, enrollmentCounts] = await Promise.all([
         courseIds.length ? Lesson.findAll({
             where: { course_id: { [Op.in]: courseIds } },
             attributes: ['course_id', [Lesson.sequelize.fn('COUNT', Lesson.sequelize.col('id')), 'count']],
@@ -174,10 +200,17 @@ const dbList = async (query, user = null) => {
             group: ['course_id'],
             raw: true,
         }) : [],
+        courseIds.length ? UserProgress.findAll({
+            where: { course_id: { [Op.in]: courseIds }, enrolled: true },
+            attributes: ['course_id', [UserProgress.sequelize.fn('COUNT', UserProgress.sequelize.col('id')), 'count']],
+            group: ['course_id'],
+            raw: true,
+        }).catch((err) => { console.warn('[courses] enrollment count failed:', err.message); return []; }) : [],
     ]);
 
     const lessonCountByCourse = Object.fromEntries(lessonCounts.map((r) => [r.course_id, Number(r.count) || 0]));
     const sectionCountByCourse = Object.fromEntries(sectionCounts.map((r) => [r.course_id, Number(r.count) || 0]));
+    const enrollmentCountByCourse = Object.fromEntries(enrollmentCounts.map((r) => [r.course_id, Number(r.count) || 0]));
 
     // Resolve the *assigned* instructor for each course from `instructor_ids`
     // (auth-service users). `creator` (the FK-bound user_id) is the admin who
@@ -199,10 +232,13 @@ const dbList = async (query, user = null) => {
             instructor: assigned
                 ? { id: assigned.id, name: assigned.name, email: assigned.email, photo: assigned.photo }
                 : json.creator || null, // frontend reads c.instructor.name / .email
-            category: json.Category || json.category || null, // frontend reads c.category?.title
+            // category intentionally null — courses are no longer grouped by
+            // category. Kept on the payload as null so legacy frontend code
+            // (e.g. `c.category?.title`) doesn't throw.
+            category: null,
             lesson_count: lessonCountByCourse[json.id] || 0,
             section_count: sectionCountByCourse[json.id] || 0,
-            enrolled: 0, // TODO: wire up once an Enrollment model exists
+            enrolled: enrollmentCountByCourse[json.id] || 0,
         };
     });
 
@@ -222,14 +258,17 @@ const dbList = async (query, user = null) => {
         status: status || 'all',
         instructor: instructor || 'all',
         price: price || 'all',
+        college: college || 'all',
         courses: { data: enrichedRows, total: count, per_page: limit, current_page: Number(page), last_page: Math.ceil(count / limit) },
         pending_courses, active_courses, upcoming_courses, paid_courses, free_courses,
     };
 };
 
 const createMeta = async () => {
-    const categories = await categoryRepo.findRootWithChildren();
-    return { categories };
+    // Categories used to seed the course Create form. Courses are now mapped
+    // to colleges directly (clg_ids), so no category lookup is needed. We
+    // still return `categories: []` so legacy callers don't crash on access.
+    return { categories: [] };
 };
 
 const create = async ({ body, files = {}, userId }) => {
@@ -240,7 +279,9 @@ const create = async ({ body, files = {}, userId }) => {
         title: b.title,
         slug: slugify(b.title),
         user_id: finalUserId,
-        category_id: b.category_id,
+        // category_id intentionally not written — courses are grouped by
+        // college (clg_ids) now. The DB column still exists (nullable) for
+        // legacy rows, but new courses don't populate it.
         course_type: b.course_type || 'general',
         status: b.status,
         level: b.level,
@@ -254,6 +295,13 @@ const create = async ({ body, files = {}, userId }) => {
         short_description: b.short_description,
         description: b.description,
         meta_description: b.meta_description,
+        // Multipart strings come in as 'true'/'false' or '1'/'0'; coerce to
+        // boolean so the column doesn't end up storing the truthy string '0'.
+        has_certificate: toBool(b.has_certificate, true),
+        // Colleges the course is offered at. Stored as JSON (Course.clg_ids
+        // is DataTypes.JSON). Same shape Category uses, so cross-entity
+        // college filtering stays consistent.
+        clg_ids: normalizeClgIds(b.clgIds ?? b['clgIds[]']),
     };
 
     const metaKeywords = Array.isArray(b.meta_keywords)
@@ -337,11 +385,33 @@ const update = async ({ id, body, files = {} }) => {
         data.slug = slugify(`${b.title}-${id}`);
         data.short_description = b.short_description;
         data.description = b.description;
-        data.category_id = b.category_id;
+        // category_id intentionally not written on update either (see note in
+        // `create`). College grouping comes from clg_ids below.
         data.level = b.level;
         data.language = String(b.language || '').toLowerCase();
         data.status = b.status;
-        data.instructor_ids = JSON.stringify(b.instructors || []);
+        // Only overwrite the instructor assignment when the form actually
+        // sent one. Previously, partial Basic-tab saves submitted an empty
+        // `b.instructors`, which JSON-stringified to `'[]'` and wiped the
+        // real instructor — the page then fell back to the admin-creator,
+        // making it look like the instructor was hardcoded.
+        const incoming = Array.isArray(b.instructors)
+            ? b.instructors.filter((v) => v !== null && v !== undefined && String(v).trim() !== '')
+            : (b.instructors && String(b.instructors).trim() !== '' ? [b.instructors] : []);
+        if (incoming.length) {
+            data.instructor_ids = JSON.stringify(incoming.map(String));
+        }
+        // Only overwrite clg_ids if the edit form actually sent it — otherwise
+        // a partial Basic-tab save would silently wipe the college mapping.
+        // Mirrors the guard CategoryService.update uses.
+        if (b.clgIds !== undefined || b['clgIds[]'] !== undefined) {
+            data.clg_ids = normalizeClgIds(b.clgIds ?? b['clgIds[]']);
+        }
+        // Only update if the form sent the field — keeps the column intact
+        // when other admin flows submit a partial basic-tab payload.
+        if (b.has_certificate !== undefined) {
+            data.has_certificate = toBool(b.has_certificate, true);
+        }
     } else if (b.tab === 'pricing') {
         data.is_paid = b.is_paid;
         data.price = b.price || 0;

@@ -19,8 +19,11 @@ const LessonWatchProgress = require('./LessonWatchProgress')(sequelize);
 const Language = require('./Language')(sequelize);
 const Forum = require('./Forum')(sequelize);
 const ForumReport = require('./ForumReport')(sequelize);
+const Program = require('./Program')(sequelize);
+const Batch = require('./Batch')(sequelize);
+const BatchMember = require('./BatchMember')(sequelize);
 
-const models = { Category, Course, SeoField, User, Lesson, Section, Question, QuizSubmission, Setting, LiveClass, Coupon, Certificate, PreAssessmentResult, UserProgress, LessonCompletion, LessonWatchProgress, Language, Forum, ForumReport };
+const models = { Category, Course, SeoField, User, Lesson, Section, Question, QuizSubmission, Setting, LiveClass, Coupon, Certificate, PreAssessmentResult, UserProgress, LessonCompletion, LessonWatchProgress, Language, Forum, ForumReport, Program, Batch, BatchMember };
 Object.values(models).forEach((m) => m.associate && m.associate(models));
 
 module.exports = { sequelize, ...models };

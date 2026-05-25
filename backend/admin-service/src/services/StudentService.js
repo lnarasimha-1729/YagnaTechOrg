@@ -1,17 +1,10 @@
 const bcrypt = require('bcryptjs');
 const { QueryTypes } = require('sequelize');
-const userRepo = require('../repositories/UserRepository');
 const { sequelize } = require('../models');
 const authDb = require('../config/authDatabase');
+const assessmentDb = require('../config/assessmentDatabase');
 const { upload, removeFile, niceFileName } = require('../helpers/fileUploader');
 const { HttpError } = require('../middlewares/error');
-
-const sanitize = (u) => {
-    const o = u.toJSON ? u.toJSON() : { ...u };
-    delete o.password;
-    delete o.remember_token;
-    return o;
-};
 
 // Students sign up through auth-service, which writes to lucy_devdb.users
 // (string userId PK, roleId -> roles table). The admin "Manage Students"
@@ -57,7 +50,13 @@ const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
         const rows = await authDb.query(
             `SELECT u.userId AS id, u.name, u.email, u.phone,
                     u.createdAt, u.preScore, u.preScoreDuration,
+                    u.postScore, u.postScoreDuration,
                     u.studentPhoto,
+                    -- Program the student picked at signup (display-only).
+                    u.programInterested AS program_interested,
+                    -- Graduation year doubles as the student's batch on the
+                    -- Manage Students table; no separate batch column exists.
+                    u.graduationYear  AS batch,
                     COALESCE(c.clgName, NULLIF(TRIM(u.collegeName), '')) AS college,
                     pr.program AS program_request,
                     pr.status  AS program_request_status
@@ -89,6 +88,20 @@ const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
         // pass/fail + the attempt timestamp, which the student schema doesn't.
         const ids = rows.map((r) => String(r.id));
         let metaByUser = {};
+        // Map of userId -> [{id, title, slug}, ...] for enrolled courses,
+        // resolved from user_progress + courses (both in the admin DB).
+        let enrolledByUser = {};
+        // Map of userId -> { issued, count, latest_issued_at } for the
+        // certificate column.
+        let certByUser = {};
+        // Map of userId -> selectedProgram from pre_assessment_registrations
+        // (assessment-service DB). This is the SOURCE OF TRUTH for the
+        // student's program of interest — the legacy users.programInterested
+        // column is kept as a fallback for pre-registration accounts.
+        let programInterestedByUser = {};
+        // Map of userId -> batch name from batch_members + batches (admin DB).
+        // A student in multiple batches surfaces the most recently joined one.
+        let batchByUser = {};
         if (ids.length) {
             const pre = await sequelize.query(
                 `SELECT user_id, passed, created_at
@@ -104,6 +117,103 @@ const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
                 };
                 return acc;
             }, {});
+
+            // Enrolled courses: join user_progress (the cross-DB integer
+            // user_id column stores the student's userId) with courses to get
+            // the title + slug for the table. Best-effort — a DB miss just
+            // shows an empty list for that row.
+            try {
+                const enrolled = await sequelize.query(
+                    `SELECT up.user_id, c.id AS course_id, c.title, c.slug
+                       FROM user_progress up
+                       JOIN courses c ON c.id = up.course_id
+                      WHERE up.enrolled = 1
+                        AND up.user_id IN (:ids)`,
+                    { replacements: { ids }, type: QueryTypes.SELECT }
+                );
+                enrolledByUser = enrolled.reduce((acc, e) => {
+                    const key = String(e.user_id);
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push({ id: e.course_id, title: e.title, slug: e.slug });
+                    return acc;
+                }, {});
+            } catch (err) {
+                console.warn('[students] enrolled courses lookup failed:', err.message);
+            }
+
+            // Certificates issued to the listed students. One row per (user,
+            // course) — we collapse to a "Issued / Not issued" badge for the
+            // table column. Best-effort: a DB miss just shows "Not issued".
+            try {
+                const certs = await sequelize.query(
+                    `SELECT user_id, COUNT(*) AS issued_count,
+                            MAX(issued_at) AS latest_issued_at
+                       FROM certificates
+                      WHERE user_id IN (:ids)
+                        AND status = 1
+                      GROUP BY user_id`,
+                    { replacements: { ids }, type: QueryTypes.SELECT }
+                );
+                certByUser = certs.reduce((acc, c) => {
+                    acc[String(c.user_id)] = {
+                        issued: Number(c.issued_count) > 0,
+                        count: Number(c.issued_count) || 0,
+                        latest_issued_at: c.latest_issued_at || null,
+                    };
+                    return acc;
+                }, {});
+            } catch (err) {
+                console.warn('[students] certificates lookup failed:', err.message);
+            }
+
+            // Program of interest: read from the pre-assessment onboarding
+            // form (assessment-service DB). Latest registration per student
+            // wins — if a student has registered more than once we want the
+            // most recent selection. Falls back to users.programInterested
+            // at row-shape time if no registration exists.
+            try {
+                const regs = await assessmentDb.query(
+                    `SELECT userId, selectedProgram, createdAt
+                       FROM pre_assessment_registrations
+                      WHERE userId IN (:ids)
+                      ORDER BY createdAt DESC`,
+                    { replacements: { ids }, type: QueryTypes.SELECT }
+                );
+                // First write wins because the query is sorted DESC by
+                // createdAt — so we get the most recent registration per user.
+                programInterestedByUser = regs.reduce((acc, r) => {
+                    const key = String(r.userId);
+                    if (!acc[key]) acc[key] = r.selectedProgram;
+                    return acc;
+                }, {});
+            } catch (err) {
+                // Surface the full error — a silent warning is what masked the
+                // missing ASSESSMENT_DB_NAME env var that broke this lookup.
+                console.error(
+                    '[students] pre-assessment registration lookup failed:',
+                    err.message,
+                    '\n  Check ASSESSMENT_DB_NAME in admin-service .env (table',
+                    'pre_assessment_registrations lives in lucy_devdb).'
+                );
+            }
+
+            try {
+                const batches = await sequelize.query(
+                    `SELECT bm.user_id, b.name, bm.created_at
+                       FROM batch_members bm
+                       JOIN batches b ON b.id = bm.batch_id
+                      WHERE bm.user_id IN (:ids)
+                      ORDER BY bm.created_at DESC`,
+                    { replacements: { ids }, type: QueryTypes.SELECT }
+                );
+                batchByUser = batches.reduce((acc, b) => {
+                    const key = String(b.user_id);
+                    if (!acc[key]) acc[key] = b.name;
+                    return acc;
+                }, {});
+            } catch (err) {
+                console.warn('[students] batch lookup failed:', err.message);
+            }
         }
 
         // Same threshold as PreAssessmentController.PASS_THRESHOLD. We derive
@@ -123,10 +233,24 @@ const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
             // /uploads mount. The frontend (Index.jsx avatarUrl) prepends
             // VITE_ADMIN_API_URL. null → frontend falls back to initials.
             const { studentPhoto, ...rest } = r;
+            const enrolledCourses = enrolledByUser[String(r.id)] || [];
+            // Post-assessment uses the same pass threshold as pre-assessment.
+            // No duration column exists for post, so we omit it.
+            const hasPost = r.postScore != null;
+            const postScore = hasPost ? Number(r.postScore) : null;
+            const cert = certByUser[String(r.id)] || null;
+            // Prefer the value from the pre-assessment registration form;
+            // fall back to the legacy column so pre-registration accounts
+            // still surface something.
+            const programInterestedFromReg = programInterestedByUser[String(r.id)] || null;
+            const batchName = batchByUser[String(r.id)] || null;
             return {
                 ...rest,
+                batch: batchName || rest.batch || null,
+                program_interested: programInterestedFromReg || rest.program_interested || null,
                 photo: studentPhoto || null,
-                enrolled_count: 0,
+                enrolled_courses: enrolledCourses,
+                enrolled_count: enrolledCourses.length,
                 pre_assessment: hasPre
                     ? {
                         score,
@@ -136,6 +260,15 @@ const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
                         taken_at: meta.taken_at ?? null,
                     }
                     : null,
+                post_assessment: hasPost
+                    ? {
+                        score: postScore,
+                        duration_seconds:
+                            r.postScoreDuration == null ? null : Number(r.postScoreDuration),
+                        passed: postScore >= PASS_THRESHOLD,
+                    }
+                    : null,
+                certificate: cert || { issued: false, count: 0, latest_issued_at: null },
             };
         });
         return { students, total: Number(count), page: Number(page), per_page: limit };
@@ -148,8 +281,9 @@ const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
 const get = async (id) => {
     const rows = await authDb.query(
         `SELECT u.userId AS id, u.name, u.email, u.phone, u.dob, u.gender,
-                u.educationLevel, u.branch, u.collegeName, u.graduationYear,
-                u.collegeCode, u.programInterested, u.studentPhoto, u.createdAt
+                u.educationLevel, u.branch, u.collegeName, u.collegeId,
+                u.graduationYear, u.collegeCode, u.programInterested,
+                u.studentPhoto, u.createdAt
            FROM users u
            JOIN roles r ON r.roleId = u.roleId
           WHERE r.role = 'student' AND u.userId = :id
@@ -163,6 +297,33 @@ const get = async (id) => {
     return { student: { ...rest, photo: studentPhoto || null } };
 };
 
+// 11-char userId, same pattern as auth-service's generateUserID ("20" + 9
+// digits). Inlined so admin-service doesn't depend on the auth service code.
+const generateUserId = () => {
+    const n = Math.floor(100000000 + Math.random() * 900000000);
+    return `20${n}`;
+};
+
+const resolveStudentRoleId = async () => {
+    const rows = await authDb.query(
+        "SELECT roleId FROM roles WHERE role = :role LIMIT 1",
+        { replacements: { role: 'student' }, type: QueryTypes.SELECT }
+    );
+    if (!rows.length) throw new HttpError(500, "student role not found in roles table");
+    return rows[0].roleId;
+};
+
+const isAuthEmailTaken = async (email) => {
+    const rows = await authDb.query(
+        "SELECT 1 FROM users WHERE email = :email LIMIT 1",
+        { replacements: { email }, type: QueryTypes.SELECT }
+    );
+    return rows.length > 0;
+};
+
+// Students added from Manage Students must land in the same auth-service
+// users table the list() query reads from (lucy_devdb.users), otherwise the
+// new row never appears in the admin students grid. Mirrors InstructorService.
 const create = async (body, file) => {
     if (!body.name || !body.email || !body.password) {
         throw new HttpError(422, 'Name, email, and password are required');
@@ -170,34 +331,46 @@ const create = async (body, file) => {
     if (String(body.password).length < 8) {
         throw new HttpError(422, 'Password must be at least 8 characters');
     }
-    if (await userRepo.isEmailTaken(body.email)) {
+    if (await isAuthEmailTaken(body.email)) {
         throw new HttpError(422, 'Email already in use');
     }
 
-    const data = {
-        name: body.name,
-        about: body.about || null,
-        phone: body.phone || null,
-        address: body.address || null,
-        email: body.email,
-        password: await bcrypt.hash(body.password, 10),
-        facebook: body.facebook || null,
-        twitter: body.twitter || null,
-        website: body.website || null,
-        linkedin: body.linkedin || null,
-        role: 'student',
-        status: 1,
-    };
+    const roleId = await resolveStudentRoleId();
+    const userId = generateUserId();
+    const passwordHash = await bcrypt.hash(body.password, 10);
 
+    let studentPhoto = null;
     if (file) {
-        const ext = file.originalname.split('.').pop() || 'jpg';
+        const ext = (file.originalname || '').split('.').pop() || 'jpg';
         const destPath = `uploads/users/student/${niceFileName(body.name, ext)}`;
-        await upload(file, destPath, 200, 200);
-        data.photo = destPath;
+        await upload(file, destPath, 400, 400);
+        studentPhoto = destPath;
     }
 
-    const student = await userRepo.create(data);
-    return { message: 'Student added successfully', student: sanitize(student) };
+    await authDb.query(
+        `INSERT INTO users
+            (userId, name, email, passwordHash, phone, roleId,
+             collegeId, studentPhoto, createdAt, updatedAt)
+         VALUES
+            (:userId, :name, :email, :passwordHash, :phone, :roleId,
+             :collegeId, :studentPhoto, NOW(), NOW())`,
+        {
+            replacements: {
+                userId,
+                name: body.name,
+                email: body.email,
+                passwordHash,
+                phone: body.phone || null,
+                roleId,
+                collegeId: body.collegeId ? String(body.collegeId) : null,
+                studentPhoto,
+            },
+            type: QueryTypes.INSERT,
+        }
+    );
+
+    const created = await get(userId);
+    return { message: 'Student added successfully', student: created.student };
 };
 
 // Students live in auth-service's lucy_devdb.users (string userId PK,
@@ -240,6 +413,14 @@ const update = async (id, body, file = null) => {
         email: body.email,
         phone: body.phone ?? student.phone ?? null,
     };
+
+    // Only touch collegeId when the form actually submitted the field.
+    // Empty string from the "— Not assigned —" option clears it; absent
+    // key (e.g. legacy callers) leaves the existing value alone.
+    if (Object.prototype.hasOwnProperty.call(body, 'collegeId')) {
+        sets.push('collegeId = :collegeId');
+        replacements.collegeId = body.collegeId ? String(body.collegeId) : null;
+    }
 
     if (body.password) {
         if (String(body.password).length < 8) {

@@ -57,14 +57,14 @@
 
 
 
-import 'dotenv/config';
+import './loadEnv.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import sequelize from './db/index.js';
 import Question from './db/models/Question.js';
 import QuestionSet from './db/models/QuestionSet.js';
@@ -525,6 +525,37 @@ async function seedPostAssessment() {
 export async function initDb() {
   await sequelize.authenticate();
   await sequelize.sync();
+
+  // pre_assessment_registrations migrations:
+  //   • selectedProgramId — new INT column linking the chosen program to
+  //     admin-service programs.id. Nullable so legacy rows stay valid.
+  //   • selectedProgram   — was an ENUM of 3 hardcoded titles; widen to
+  //     VARCHAR so admin-created program titles fit.
+  // Both run idempotently on every startup — same pattern admin-service uses
+  // for its on-the-fly column adds.
+  try {
+    const { QueryTypes } = await import('sequelize');
+    const cols = await sequelize.query('DESCRIBE pre_assessment_registrations', {
+      type: QueryTypes.SELECT,
+    });
+    const hasProgramId = cols.some((c) => c.Field === 'selectedProgramId');
+    if (!hasProgramId) {
+      await sequelize.query(
+        'ALTER TABLE pre_assessment_registrations ADD COLUMN selectedProgramId INT NULL'
+      );
+      console.log('🛠️  Added pre_assessment_registrations.selectedProgramId column');
+    }
+    const programCol = cols.find((c) => c.Field === 'selectedProgram');
+    if (programCol && /^enum/i.test(programCol.Type)) {
+      await sequelize.query(
+        'ALTER TABLE pre_assessment_registrations MODIFY COLUMN selectedProgram VARCHAR(255) NOT NULL'
+      );
+      console.log('🛠️  Widened pre_assessment_registrations.selectedProgram ENUM → VARCHAR(255)');
+    }
+  } catch (e) {
+    console.warn('[pre_assessment_registrations] column migration skipped:', e.message);
+  }
+
   await seedPreAssessment();
   await seedPostAssessment();
   console.log('🗄️  Database connected and synced---');

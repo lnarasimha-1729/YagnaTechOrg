@@ -33,6 +33,11 @@ module.exports = (sequelize) => {
         // offered at. No FK because colleges live in lucy_devdb, not lms_admin.
         // Validated at the service layer against college-service.
         clg_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
+        // Batch IDs (lms_admin.batches.id) this course is scoped to. Optional —
+        // a course can be scoped to colleges only (clg_ids) and skip batches.
+        // Stored as JSON for the same reason clg_ids is JSON: variable-length,
+        // never joined at the DB level.
+        batch_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
         average_rating: { type: DataTypes.FLOAT, defaultValue: 0 },
         expiry_period: { type: DataTypes.INTEGER, allowNull: true },
         // Whether completion of this course grants a certificate. Surfaced on

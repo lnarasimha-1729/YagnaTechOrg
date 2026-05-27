@@ -2,7 +2,6 @@ import { DataTypes } from "sequelize";
 import sequelize from "../index.js";
 import {
   GENDERS,
-  PROGRAMS,
   ASSESSMENT_STATUSES,
 } from "../../utils/preAssessmentConstants.js";
 
@@ -43,8 +42,20 @@ const PreAssessmentRegistration = sequelize.define(
       type: DataTypes.ENUM(...GENDERS),
       allowNull: false,
     },
+    // Admin-created program the student picked. Stored as id + frozen title
+    // snapshot so historic registrations survive renames / deletes of the
+    // source program row. selectedProgramId is null only for legacy rows
+    // created before admin programs were wired in.
+    selectedProgramId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    // Widened from ENUM to free-text — admin-created program titles aren't
+    // a fixed set. The legacy values ("AI Frontier" etc.) still pass through
+    // this column as plain strings. Auto-migration in app.js drops the ENUM
+    // constraint on existing tables.
     selectedProgram: {
-      type: DataTypes.ENUM(...PROGRAMS),
+      type: DataTypes.STRING(255),
       allowNull: false,
     },
     // File metadata — stored as a JSON blob so we can extend the structure

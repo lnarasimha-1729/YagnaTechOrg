@@ -35,6 +35,11 @@ module.exports = (sequelize) => {
         // stored as strings or ints — both are accepted on read). Same shape
         // clg_ids uses. Allows a program to bundle multiple courses.
         course_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
+        // Batches the program is scoped to. Same JSON-array shape as
+        // course_ids / clg_ids — kept in sync with the selection in the
+        // Add/Edit Program form's Batch picker (cascades off the selected
+        // colleges).
+        batch_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
     }, {
         tableName: 'programs',
         timestamps: true,

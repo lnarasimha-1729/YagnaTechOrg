@@ -2,16 +2,107 @@ const { Op, QueryTypes } = require('sequelize');
 const courseRepo = require('../repositories/CourseRepository');
 const categoryRepo = require('../repositories/CategoryRepository');
 const authDb = require('../config/authDatabase');
+const assessmentDb = require('../config/assessmentDatabase');
 const sectionRepo = require('../repositories/SectionRepository');
 const lessonRepo = require('../repositories/LessonRepository');
 const seoRepo = require('../repositories/SeoFieldRepository');
 const questionRepo = require('../repositories/QuestionRepository');
 const submissionRepo = require('../repositories/QuizSubmissionRepository');
-const { Lesson, Section, User, Category, UserProgress } = require('../models');
+const { Lesson, Section, User, Category, UserProgress, BatchMember } = require('../models');
 const slugify = require('../helpers/slugify');
 const { upload, removeFile, niceFileName } = require('../helpers/fileUploader');
 const mailer = require('../helpers/mailer');
+const env = require('../config/env');
+const { enqueueMany } = require('../jobs/emailQueue');
+const { courseAssignedToStudent } = require('../helpers/emailTemplates');
 const { HttpError } = require('../middlewares/error');
+
+// Queue a "you've been assigned to a new course" email for every student
+// who sits at one of the course's colleges AND is a member of one of its
+// batches. Best-effort: this runs after the course has already been
+// persisted, so any failure here is logged but never propagates back to
+// the admin (the course creation already succeeded).
+//
+// Pre-assessment status is read from the assessment DB so the template can
+// switch between "complete the assessment" (registered) vs "register and
+// complete the assessment" (not registered) without an extra round-trip
+// per student.
+async function enqueueCourseAssignedEmails({ course, clgIds, batchIds }) {
+    try {
+        if (!course || !Array.isArray(clgIds) || !Array.isArray(batchIds)) return;
+        if (clgIds.length === 0 || batchIds.length === 0) return;
+
+        // Students in the course's batches — the master list of recipients.
+        // BatchMember.user_id is STRING (11-digit auth userIds overflow INT).
+        const memberRows = await BatchMember.findAll({
+            where: { batch_id: { [Op.in]: batchIds } },
+            attributes: ['user_id'],
+            raw: true,
+        });
+        const memberUserIds = Array.from(new Set(memberRows.map((r) => String(r.user_id)).filter(Boolean)));
+        if (memberUserIds.length === 0) return;
+
+        // Intersect with college scope + resolve name/email in one query.
+        // collegeId IN clg_ids ensures a batch's member isn't reached if
+        // they later moved colleges — the course is scoped to specific
+        // (college, batch) tuples, not batch alone.
+        const userRows = await authDb.query(
+            `SELECT u.userId AS id, u.name, u.email
+               FROM users u
+               JOIN roles r ON r.roleId = u.roleId
+              WHERE r.role = 'student'
+                AND u.collegeId IN (:clgIds)
+                AND u.userId IN (:userIds)`,
+            {
+                replacements: { clgIds, userIds: memberUserIds },
+                type: QueryTypes.SELECT,
+            }
+        );
+        if (userRows.length === 0) return;
+
+        // Pre-assessment registration check — single grouped query so we
+        // don't fire N lookups in the loop. Any row at all means "registered"
+        // (status doesn't matter for the email's CTA branch).
+        const recipientIds = userRows.map((r) => String(r.id));
+        let registeredSet = new Set();
+        try {
+            const regRows = await assessmentDb.query(
+                `SELECT DISTINCT userId
+                   FROM pre_assessment_registrations
+                  WHERE userId IN (:ids)`,
+                { replacements: { ids: recipientIds }, type: QueryTypes.SELECT }
+            );
+            registeredSet = new Set(regRows.map((r) => String(r.userId)));
+        } catch (e) {
+            // assessmentDb unreachable → treat everyone as "not registered"
+            // so they still get a nudge with the register-and-complete copy.
+            console.warn('[course-emails] pre-assessment lookup failed:', e.message);
+        }
+
+        const jobs = userRows
+            .filter((r) => r.email)
+            .map((r) => {
+                const { subject, html } = courseAssignedToStudent({
+                    studentName: r.name,
+                    courseTitle: course.title,
+                    hasRegisteredForPreAssessment: registeredSet.has(String(r.id)),
+                    loginUrl: env.mail.lmsLoginUrl,
+                });
+                return {
+                    to: r.email,
+                    subject,
+                    html,
+                    userId: String(r.id),
+                };
+            });
+
+        if (jobs.length) {
+            await enqueueMany(jobs);
+        }
+    } catch (err) {
+        console.warn('[course-emails] enqueue failed:', err.message);
+    }
+}
 
 const DEFAULT_DRIP = JSON.stringify({
     lesson_completion_role: 'percentage',
@@ -31,6 +122,23 @@ const normalizeClgIds = (raw) => {
     if (raw == null) return [];
     const arr = Array.isArray(raw) ? raw : [raw];
     return Array.from(new Set(arr.map((v) => String(v).trim()).filter(Boolean)));
+};
+
+// Batch ids are integers in the DB; trim/dedupe/numerise and drop anything
+// that isn't a positive integer. Mirrors normalizeClgIds in spirit.
+const normalizeBatchIds = (raw) => {
+    if (raw == null) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    const seen = new Set();
+    const out = [];
+    for (const v of arr) {
+        const n = Number(String(v).trim());
+        if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
+            seen.add(n);
+            out.push(n);
+        }
+    }
+    return out;
 };
 
 // Multipart form values arrive as strings. Treat '1'/'true'/'on' (case-insensitive)
@@ -302,6 +410,10 @@ const create = async ({ body, files = {}, userId }) => {
         // is DataTypes.JSON). Same shape Category uses, so cross-entity
         // college filtering stays consistent.
         clg_ids: normalizeClgIds(b.clgIds ?? b['clgIds[]']),
+        // Batches the course is offered to. Subset of the selected colleges —
+        // app-layer validation (controller) trims to batches whose clg_id is
+        // present in clg_ids. Stored as JSON of numeric batch ids.
+        batch_ids: normalizeBatchIds(b.batchIds ?? b['batchIds[]']),
     };
 
     const metaKeywords = Array.isArray(b.meta_keywords)
@@ -345,6 +457,17 @@ const create = async ({ body, files = {}, userId }) => {
 
     const course = await courseRepo.create(data);
     await course.update({ slug: slugify(`${b.title}-${course.id}`) });
+
+    // Fire-and-forget notification to every student in the course's
+    // (college, batch) intersection. NOT awaited — the admin already saw
+    // the course created, SMTP latency must not block the response. The
+    // queue worker handles delivery + retries; this just enqueues.
+    enqueueCourseAssignedEmails({
+        course,
+        clgIds: data.clg_ids || [],
+        batchIds: data.batch_ids || [],
+    });
+
     return { success: 'Course added successfully', course_id: course.id };
 };
 
@@ -406,6 +529,11 @@ const update = async ({ id, body, files = {} }) => {
         // Mirrors the guard CategoryService.update uses.
         if (b.clgIds !== undefined || b['clgIds[]'] !== undefined) {
             data.clg_ids = normalizeClgIds(b.clgIds ?? b['clgIds[]']);
+        }
+        // Same partial-save guard as clg_ids — only touch batch_ids when the
+        // form sent it explicitly.
+        if (b.batchIds !== undefined || b['batchIds[]'] !== undefined) {
+            data.batch_ids = normalizeBatchIds(b.batchIds ?? b['batchIds[]']);
         }
         // Only update if the form sent the field — keeps the column intact
         // when other admin flows submit a partial basic-tab payload.

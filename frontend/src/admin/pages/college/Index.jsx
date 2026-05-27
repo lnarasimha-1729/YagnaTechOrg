@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import { listColleges, deleteCollege } from '../../api/college';
+import { listColleges, deleteCollege, setCollegeAccess } from '../../api/college';
 import { BsThreeDotsVertical } from 'react-icons/bs';
 
 export default function CollegeIndex() {
@@ -43,6 +43,18 @@ export default function CollegeIndex() {
         try {
             await deleteCollege(id);
             toast.success('College deleted successfully');
+            setConfirm(null);
+            load();
+        } catch (e) {
+            toast.error(e.response?.data?.error || 'Failed');
+            setConfirm(null);
+        }
+    };
+
+    const handleSetAccess = async (id, isActive) => {
+        try {
+            await setCollegeAccess(id, isActive);
+            toast.success(isActive ? 'Access granted' : 'Access revoked');
             setConfirm(null);
             load();
         } catch (e) {
@@ -166,7 +178,9 @@ export default function CollegeIndex() {
                                                 <td>
                                                     <CollegeOptions
                                                         college={c}
-                                                        onDelete={() => setConfirm({ id: c.clgId, name: c.clgName })}
+                                                        onDelete={() => setConfirm({ type: 'delete', id: c.clgId, name: c.clgName })}
+                                                        onRevoke={() => setConfirm({ type: 'revoke', id: c.clgId, name: c.clgName })}
+                                                        onGive={() => setConfirm({ type: 'give', id: c.clgId, name: c.clgName })}
                                                     />
                                                 </td>
                                             </tr>
@@ -181,23 +195,32 @@ export default function CollegeIndex() {
 
             {confirm && (
                 <ConfirmDialog
-                    title="Delete college"
-                    message={`Are you sure you want to delete ${confirm.name}?`}
+                    message={
+                        confirm.type === 'revoke'
+                            ? `Revoke access for ${confirm.name}? The college admin will lose access until you grant it again.`
+                            : confirm.type === 'give'
+                                ? `Grant access for ${confirm.name}?`
+                                : `Are you sure you want to delete ${confirm.name}?`
+                    }
                     onCancel={() => setConfirm(null)}
-                    onConfirm={() => handleDelete(confirm.id)}
+                    onConfirm={() => {
+                        if (confirm.type === 'revoke') return handleSetAccess(confirm.id, false);
+                        if (confirm.type === 'give') return handleSetAccess(confirm.id, true);
+                        return handleDelete(confirm.id);
+                    }}
                 />
             )}
         </div>
     );
 }
 
-function CollegeOptions({ college, onDelete }) {
+function CollegeOptions({ college, onDelete, onRevoke, onGive }) {
     const [open, setOpen] = useState(false);
     const [coords, setCoords] = useState({ top: 0, left: 0 });
     const triggerRef = useRef(null);
     const menuRef = useRef(null);
     const MENU_WIDTH = 180;
-    const ESTIMATED_MENU_HEIGHT = 140;
+    const ESTIMATED_MENU_HEIGHT = 170;
 
     useEffect(() => {
         if (!open) return;
@@ -269,6 +292,27 @@ function CollegeOptions({ college, onDelete }) {
                             Edit
                         </Link>
                     </li>
+                    {college.isActive === false ? (
+                        <li>
+                            <button
+                                type="button"
+                                className="w-full text-left block px-3 py-2 text-success hover:bg-gray-50"
+                                onClick={() => { close(); onGive(); }}
+                            >
+                                Give Access
+                            </button>
+                        </li>
+                    ) : (
+                        <li>
+                            <button
+                                type="button"
+                                className="w-full text-left block px-3 py-2 text-danger hover:bg-gray-50"
+                                onClick={() => { close(); onRevoke(); }}
+                            >
+                                Revoke Access
+                            </button>
+                        </li>
+                    )}
                     <li>
                         <button
                             type="button"

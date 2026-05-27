@@ -9,5 +9,9 @@ router.post('/colleges', ctrl.store);
 // keeping the verb consistent avoids special-casing the API client.)
 router.post('/colleges/:id', ctrl.update);
 router.delete('/colleges/:id', ctrl.destroy);
+// Manage Colleges → Options → Revoke / Give Access. POST + boolean keeps
+// the verb consistent with /colleges/:id update and avoids PATCH-handling
+// quirks in the existing client.
+router.post('/colleges/:id/access', ctrl.setAccess);
 
 module.exports = router;

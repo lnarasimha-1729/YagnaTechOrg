@@ -20,3 +20,15 @@ exports.update = asyncHandler(async (req, res) => {
 exports.delete = asyncHandler(async (req, res) => {
     res.json(await programService.remove(req.params.id));
 });
+
+// Used by Manage Students bulk + per-row dropdown: programs the admin
+// already linked to this (college, batch). Names or ids both accepted so
+// the page can call with whatever it already has on hand.
+exports.forCollegeBatch = asyncHandler(async (req, res) => {
+    res.json(await programService.listForCollegeBatch({
+        clgId: req.query.clgId,
+        clgName: req.query.clgName,
+        batchId: req.query.batchId,
+        batchName: req.query.batchName,
+    }));
+});

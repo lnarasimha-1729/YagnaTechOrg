@@ -51,6 +51,17 @@ exports.removeMember = asyncHandler(async (req, res) => {
     }));
 });
 
+// Bypasses requireCollege — root admin needs this to populate the batches
+// dropdown on Add Course where they pick the colleges themselves. Scopes by
+// the ?clgIds= query param (comma-separated or repeated).
+exports.byColleges = asyncHandler(async (req, res) => {
+    const raw = req.query.clgIds ?? req.query['clgIds[]'] ?? '';
+    const ids = Array.isArray(raw)
+        ? raw
+        : String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+    res.json(await service.listByColleges({ clgIds: ids }));
+});
+
 exports.eligibleStudents = asyncHandler(async (req, res) => {
     const clgId = requireCollege(req);
     res.json(await service.eligibleStudents({ clgId }));

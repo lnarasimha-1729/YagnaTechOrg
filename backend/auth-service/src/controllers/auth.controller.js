@@ -1,10 +1,35 @@
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
+import { QueryTypes } from 'sequelize';
+import sequelize from '../db/index.js';
 import { generateUserID } from '../utils/uidGeneration.js';
 import User from '../db/models/User.js';
 import Role from '../db/models/Role.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt.js';
 import { id } from 'zod/locales';
+
+// Block login when the user's college has been revoked from Manage Colleges
+// → Options → Revoke Access. Raw SELECT avoids defining a duplicate College
+// model just for this gate. Best-effort: a missing column (older DB without
+// the auto-migration applied yet) or a query failure falls through so we
+// don't lock everyone out on a DB hiccup.
+async function assertCollegeActive(collegeId) {
+  if (!collegeId) return;
+  try {
+    const rows = await sequelize.query(
+      'SELECT isActive FROM colleges WHERE clgId = :clgId LIMIT 1',
+      { replacements: { clgId: collegeId }, type: QueryTypes.SELECT }
+    );
+    if (rows.length && Number(rows[0].isActive) === 0) {
+      const err = new Error('Your college access has been revoked. Please contact your administrator.');
+      err.status = 403;
+      throw err;
+    }
+  } catch (e) {
+    if (e.status === 403) throw e;
+    console.warn('[auth] college isActive check skipped:', e.message);
+  }
+}
 
 // ======================
 // Schemas
@@ -146,10 +171,15 @@ export async function login(req, res) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    await assertCollegeActive(user.collegeId);
+
     const result = await issueTokens(user, res);
     return res.json(result);
 
   } catch (err) {
+    if (err.status === 403) {
+      return res.status(403).json({ error: err.message });
+    }
     console.error('Login error:', err);
     return res.status(400).json({ error: err.message });
   }

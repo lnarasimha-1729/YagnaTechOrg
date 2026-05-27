@@ -20,3 +20,7 @@ exports.update = asyncHandler(async (req, res) => {
 exports.destroy = asyncHandler(async (req, res) => {
     res.json(await collegeService.remove(req.params.id));
 });
+
+exports.setAccess = asyncHandler(async (req, res) => {
+    res.json(await collegeService.setAccess(req.params.id, req.body?.isActive));
+});

@@ -35,6 +35,54 @@ app.use('/uploads', express.static(path.join(__dirname, '..', env.uploadDir)));
 
 app.get(['/api/health', '/health'], (_req, res) => res.json({ ok: true, service: 'admin-service' }));
 
+// Service-to-service email enqueue. Used today by assessment-service to
+// queue a "you've registered for pre-assessment" mail without having to own
+// a second DB connection into lms_admin.email_jobs. Guarded by a shared
+// secret in the X-Internal-Secret header — leave INTERNAL_API_SECRET unset
+// to disable the endpoint entirely.
+//
+// Body shape:
+//   {
+//     template: 'preAssessmentRegistered',  // template name in emailTemplates.js
+//     data: { studentName, programName, ... },  // template-specific
+//     to: '<recipient email>',
+//     userId: '<optional auth userId, stored for audit>',
+//     batchId: <optional batch id, stored for audit>
+//   }
+const emailTemplates = require('./helpers/emailTemplates');
+const { enqueue: enqueueEmail } = require('./jobs/emailQueue');
+app.post('/api/internal/email/enqueue', express.json({ limit: '1mb' }), async (req, res) => {
+    const expected = env.internalSecret;
+    if (!expected) return res.status(503).json({ error: 'Internal endpoints disabled' });
+    const provided = req.headers['x-internal-secret'];
+    if (!provided || provided !== expected) {
+        return res.status(401).json({ error: 'Unauthorised' });
+    }
+    try {
+        const { template, data, to, userId, batchId } = req.body || {};
+        const builder = template && emailTemplates[template];
+        if (typeof builder !== 'function') {
+            return res.status(422).json({ error: `Unknown template: ${template}` });
+        }
+        if (!to || typeof to !== 'string') {
+            return res.status(422).json({ error: 'Recipient `to` is required' });
+        }
+        // Inject defaults the caller doesn't need to know about. Today this
+        // is just loginUrl — pulling it from env.mail keeps the link
+        // consistent across templates and across services.
+        const enriched = {
+            loginUrl: env.mail.lmsLoginUrl,
+            ...(data || {}),
+        };
+        const { subject, html } = builder(enriched);
+        await enqueueEmail({ to, subject, html, userId, batchId });
+        return res.status(202).json({ queued: true });
+    } catch (e) {
+        console.warn('[internal/email/enqueue] failed:', e.message);
+        return res.status(500).json({ error: 'Enqueue failed' });
+    }
+});
+
 // Public read-only endpoints — no auth required
 const categoryService = require('./services/CategoryService');
 app.get('/api/public/categories', async (req, res, next) => {
@@ -66,6 +114,23 @@ app.get('/api/public/colleges', async (_req, res, next) => {
 // Both filters AND together. The arrow on My Courses uses these to show
 // "programs that include THIS course for MY college".
 const programService = require('./services/ProgramService');
+// Programs the *student* is eligible for, used by the Pre-Assessment
+// onboarding modal. Filtered by the student's collegeId + (batch_members
+// overlap with program.batch_ids OR user_progress course overlap with
+// program.course_ids). Public because student JWT isn't reachable here —
+// caller passes user_id (header or query) the same way other /api/public
+// student endpoints do.
+app.get('/api/public/programs/eligible', async (req, res) => {
+    try {
+        const userId = req.headers['x-user-id'] || req.query.user_id;
+        const { programs } = await programService.listEligible(userId);
+        return res.json({ programs });
+    } catch (e) {
+        console.warn('[public/programs/eligible] failed:', e.message);
+        return res.json({ programs: [] });
+    }
+});
+
 app.get('/api/public/programs', async (req, res, next) => {
     try {
         const { programs } = await programService.list();
@@ -75,6 +140,28 @@ app.get('/api/public/programs', async (req, res, next) => {
             ? null
             : Number(String(courseIdRaw).trim());
         const courseId = Number.isInteger(courseIdNum) && courseIdNum > 0 ? courseIdNum : null;
+
+        // Strict student-scope gate: when user_id is supplied we treat the
+        // (college, course, batch) tuple as the canonical filter. Admin has
+        // already linked every program to specific batches, so we don't
+        // surface unscoped programs or fall back when the student has no
+        // memberships — both would leak programs the admin didn't intend
+        // for this student. Anonymous callers (no user_id) still get the
+        // college+course filter only, used by the marketing/public listing.
+        const userId = req.headers['x-user-id'] || req.query.user_id;
+        let studentBatchIds = null;
+        let studentScoped = false;
+        if (userId) {
+            studentScoped = true;
+            const { BatchMember } = require('./models');
+            const memberRows = await BatchMember.findAll({
+                where: { user_id: String(userId) },
+                attributes: ['batch_id'],
+                raw: true,
+            }).catch(() => []);
+            const ids = memberRows.map((r) => Number(r.batch_id)).filter((n) => Number.isFinite(n));
+            studentBatchIds = new Set(ids);
+        }
 
         const filtered = (programs || [])
             .filter((p) => p.is_active !== false)
@@ -91,6 +178,15 @@ app.get('/api/public/programs', async (req, res, next) => {
                 const ids = Array.isArray(p.course_ids) ? p.course_ids.map(Number) : [];
                 if (ids.includes(courseId)) return true;
                 return Number(p.course_id || 0) === courseId;
+            })
+            .filter((p) => {
+                if (!studentScoped) return true;
+                // Student-scoped: program MUST be batch-scoped AND overlap
+                // one of the student's batches. No memberships → no programs.
+                if (studentBatchIds.size === 0) return false;
+                const pb = Array.isArray(p.batch_ids) ? p.batch_ids.map(Number) : [];
+                if (pb.length === 0) return false;
+                return pb.some((id) => studentBatchIds.has(id));
             });
         res.json({ programs: filtered });
     } catch (e) { next(e); }
@@ -381,6 +477,17 @@ const start = () => {
         console.log(`admin-service running on ${env.port}`);
     });
 
+    // Start the email queue worker now that the HTTP server is up. Jobs
+    // already in the table (e.g. from a previous run that crashed mid-send)
+    // will be picked up on the next tick. No-op silently when SMTP isn't
+    // configured (mailer.isConfigured() guards the poll).
+    try {
+        const emailWorker = require('./jobs/emailWorker');
+        emailWorker.start();
+    } catch (e) {
+        console.warn('[email-worker] failed to start:', e.message);
+    }
+
     // app.listen() returns asynchronously — bind failures (EADDRINUSE,
     // EACCES) arrive as 'error' events on the server, NOT as thrown
     // exceptions. Without this handler they bubble to uncaughtException
@@ -490,6 +597,23 @@ sequelize.authenticate()
             console.warn('[courses] has_certificate column check failed:', e.message);
         }
 
+        // courses.batch_ids: JSON array of batch ids the course is scoped to.
+        // Sibling of clg_ids — added so Add/Edit Course can save batch scope
+        // alongside the existing college scope.
+        try {
+            const { QueryTypes } = require('sequelize');
+            const [col] = await sequelize.query(
+                "SHOW COLUMNS FROM courses WHERE Field = 'batch_ids'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!col) {
+                await sequelize.query('ALTER TABLE courses ADD COLUMN batch_ids JSON NULL');
+                console.log('🛠️  Added courses.batch_ids column');
+            }
+        } catch (e) {
+            console.warn('[courses] batch_ids column check failed:', e.message);
+        }
+
         // Course discussion forum — create the `forums` + `forum_reports`
         // tables on first run so the module is usable without a manual
         // migration. Mirrors the Languages pattern above. No-op on restart.
@@ -523,6 +647,15 @@ sequelize.authenticate()
             console.warn('[batches] table sync failed:', e.message);
         }
 
+        // Durable email queue for batch-add notifications. The worker (set
+        // up below in `start`) polls this table — no Redis dependency.
+        try {
+            const { EmailJob } = require('./models');
+            await EmailJob.sync();
+        } catch (e) {
+            console.warn('[email-jobs] table sync failed:', e.message);
+        }
+
         // Late-added Program columns: clg_ids (multi-select colleges) and
         // course_id (single course FK). .sync() above creates the table but
         // doesn't add new columns to an existing one, so we DESCRIBE first
@@ -554,8 +687,61 @@ sequelize.authenticate()
                 await sequelize.query("ALTER TABLE programs ADD COLUMN course_ids JSON NULL");
                 console.log('🛠️  Added programs.course_ids column');
             }
+            // batch_ids: JSON array of batch ids the program is scoped to.
+            // Added so Add/Edit Program can save batch scope alongside the
+            // existing college + course scope.
+            const [batchIdsCol] = await sequelize.query(
+                "SHOW COLUMNS FROM programs WHERE Field = 'batch_ids'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!batchIdsCol) {
+                await sequelize.query("ALTER TABLE programs ADD COLUMN batch_ids JSON NULL");
+                console.log('🛠️  Added programs.batch_ids column');
+            }
         } catch (e) {
             console.warn('[programs] column check failed:', e.message);
+        }
+
+        // program_requests.program: was an ENUM of 3 hardcoded strings;
+        // widen to VARCHAR so admin-created program titles (from Manage
+        // Programs) fit. Same idempotent ALTER pattern the other migrations
+        // use. Skipped silently when the column is already VARCHAR.
+        try {
+            const { QueryTypes } = require('sequelize');
+            const authDb = require('./config/authDatabase');
+            const [col] = await authDb.query(
+                "SHOW COLUMNS FROM program_requests WHERE Field = 'program'",
+                { type: QueryTypes.SELECT }
+            );
+            if (col && /^enum/i.test(col.Type)) {
+                await authDb.query(
+                    'ALTER TABLE program_requests MODIFY COLUMN program VARCHAR(255) NOT NULL'
+                );
+                console.log('🛠️  Widened program_requests.program ENUM → VARCHAR(255) (auth DB)');
+            }
+        } catch (e) {
+            console.warn('[program_requests] program column widen skipped:', e.message);
+        }
+
+        // colleges.isActive: per-college access toggle driven from Manage
+        // Colleges → Options → Revoke / Give Access. Lives in the auth DB
+        // alongside the rest of the College row. Default 1 so pre-existing
+        // colleges remain accessible until explicitly revoked.
+        try {
+            const { QueryTypes } = require('sequelize');
+            const authDb = require('./config/authDatabase');
+            const [col] = await authDb.query(
+                "SHOW COLUMNS FROM colleges WHERE Field = 'isActive'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!col) {
+                await authDb.query(
+                    'ALTER TABLE colleges ADD COLUMN isActive TINYINT(1) NOT NULL DEFAULT 1'
+                );
+                console.log('🛠️  Added colleges.isActive column (auth DB)');
+            }
+        } catch (e) {
+            console.warn('[colleges] isActive column check failed:', e.message);
         }
 
         // live_classes.user_id holds 11-digit auth-service userIds which

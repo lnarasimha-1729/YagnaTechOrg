@@ -223,7 +223,9 @@ function formatRange(start, end) {
 }
 
 function StatusBadge({ active }) {
-    if (active === false) {
+    // MySQL TINYINT(1) comes back as a number (0/1), not a real bool — strict
+    // === false used to miss the 0 case. Treat any falsy value as inactive.
+    if (!active) {
         return (
             <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-600">
                 Inactive
@@ -243,7 +245,10 @@ function EditBatchForm({ batch, onSaved }) {
     const [description, setDescription] = useState(batch.description || '');
     const [startDate, setStartDate] = useState(batch.start_date || '');
     const [endDate, setEndDate] = useState(batch.end_date || '');
-    const [isActive, setIsActive] = useState(batch.is_active !== false);
+    // Coerce defensively — MySQL TINYINT(1) round-trips as 0/1, not true/false,
+    // so `!== false` would always be true and the dropdown would always start
+    // on "Active" even for an already-inactive batch.
+    const [isActive, setIsActive] = useState(Boolean(batch.is_active));
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
 

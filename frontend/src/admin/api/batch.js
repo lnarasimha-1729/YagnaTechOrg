@@ -30,3 +30,11 @@ export const removeBatchMember = (id, userId) =>
 // Students of the caller's college that can be added to a batch.
 export const listEligibleStudents = () =>
     api.get('/batches/eligible-students').then((r) => r.data);
+
+// Lookup-only: batches across the given college IDs. Powers the Batches
+// dropdown on Add/Edit Course where the admin first picks colleges.
+// Not gated by the JWT's college_id — root admin can call it too.
+export const listBatchesByColleges = (clgIds) =>
+    api
+        .get('/batches/by-colleges', { params: { clgIds: (clgIds || []).join(',') } })
+        .then((r) => r.data);

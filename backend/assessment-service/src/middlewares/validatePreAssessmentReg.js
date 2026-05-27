@@ -1,7 +1,4 @@
-import {
-  GENDERS,
-  PROGRAMS,
-} from "../utils/preAssessmentConstants.js";
+import { GENDERS } from "../utils/preAssessmentConstants.js";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^[0-9+\-\s()]{7,20}$/;
@@ -31,10 +28,27 @@ export default function validatePreAssessmentReg(req, res, next) {
   else if (!GENDERS.includes(gender))
     errors.gender = `Gender must be one of: ${GENDERS.join(", ")}`;
 
+  // selectedProgram is now an admin-created title (free text, max 255 chars
+  // to match the column). selectedProgramId is the FK back to programs.id so
+  // analytics can join even after a title rename. Both are required so a
+  // legacy client that only sends the title gets a clear validation error.
   const selectedProgram = (body.selectedProgram || "").trim();
   if (!selectedProgram) errors.selectedProgram = "Program selection is required";
-  else if (!PROGRAMS.includes(selectedProgram))
-    errors.selectedProgram = `Program must be one of: ${PROGRAMS.join(", ")}`;
+  else if (selectedProgram.length > 255)
+    errors.selectedProgram = "Program title is too long";
+
+  const programIdRaw = body.selectedProgramId;
+  let selectedProgramId = null;
+  if (programIdRaw === undefined || programIdRaw === null || String(programIdRaw).trim() === "") {
+    errors.selectedProgramId = "Program selection is required";
+  } else {
+    const n = Number(programIdRaw);
+    if (!Number.isInteger(n) || n <= 0) {
+      errors.selectedProgramId = "Invalid program selection";
+    } else {
+      selectedProgramId = n;
+    }
+  }
 
   // Checkboxes serialise as strings ("true"/"false") through multipart forms.
   const declarationRaw = body.declarationAccepted;
@@ -63,6 +77,7 @@ export default function validatePreAssessmentReg(req, res, next) {
     phoneNumber,
     gender,
     selectedProgram,
+    selectedProgramId,
     declarationAccepted,
   };
 

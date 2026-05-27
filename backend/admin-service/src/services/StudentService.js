@@ -12,7 +12,7 @@ const { HttpError } = require('../middlewares/error');
 // lms_admin.users. We query the auth DB read-only via authDb and map the
 // columns to the shape the existing frontend table expects (id, name,
 // email, phone, photo, enrolled_count) so no UI change is needed.
-const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
+const list = async ({ page = 1, per_page = 10, search = '', college = '', batch = '' }) => {
     const limit = Number(per_page);
     const offset = (Number(page) - 1) * limit;
     try {
@@ -271,6 +271,18 @@ const list = async ({ page = 1, per_page = 10, search = '', college = '' }) => {
                 certificate: cert || { issued: false, count: 0, latest_issued_at: null },
             };
         });
+
+        // Batch filter is applied here (post-enrichment) because batches live
+        // in the admin DB while the user list runs against authDb — a cross-
+        // DB JOIN isn't available. Per_page is already high (1000) so the
+        // in-memory filter has no real cost, and `total` is rewritten so the
+        // "Showing X of Y" line stays honest.
+        const batchName = String(batch || '').trim();
+        if (batchName) {
+            const filtered = students.filter((s) => s.batch === batchName);
+            return { students: filtered, total: filtered.length, page: Number(page), per_page: limit };
+        }
+
         return { students, total: Number(count), page: Number(page), per_page: limit };
     } catch (err) {
         console.warn('[students] auth DB query failed:', err.message);
@@ -488,8 +500,10 @@ const collegeOptions = async () => {
     return { colleges: rows.map((r) => r.college) };
 };
 
-// The three fixed programs an admin can request for a student. Kept in sync
-// with the program_requests ENUM and the Manage Students dropdown.
+// Legacy 3-string default kept ONLY as a fallback for ProgramRequestCell rows
+// where the admin hasn't created any DB programs yet. Real validation below
+// checks against programs.title from the admin DB so admin-created titles
+// flow through unchanged.
 const PROGRAM_OPTIONS = [
     'AI Frontier Program',
     'AI Frontier Plus Program',
@@ -502,8 +516,22 @@ const PROGRAM_OPTIONS = [
 const sendProgramRequest = async (id, program, requestedBy = null) => {
     const student = await findAuthStudent(id);
     if (!student) throw new HttpError(404, 'Student not found');
-    if (!PROGRAM_OPTIONS.includes(program)) {
-        throw new HttpError(422, 'Invalid program. Must be one of: ' + PROGRAM_OPTIONS.join(', '));
+
+    const title = String(program || '').trim();
+    if (!title) throw new HttpError(422, 'Program is required');
+
+    // Validate against admin-created programs first. Title is unique enough
+    // for the UI dropdown but we don't enforce DB-side uniqueness; any active
+    // program with this title is accepted. Falls back to PROGRAM_OPTIONS so
+    // a brand-new install (no DB programs yet) still works for the legacy
+    // three-program flow.
+    const matches = await sequelize.query(
+        'SELECT id FROM programs WHERE title = :title AND is_active = 1 LIMIT 1',
+        { replacements: { title }, type: QueryTypes.SELECT }
+    ).catch(() => []);
+    const allowed = matches.length > 0 || PROGRAM_OPTIONS.includes(title);
+    if (!allowed) {
+        throw new HttpError(422, `Program "${title}" is not available`);
     }
 
     await authDb.query(
@@ -517,7 +545,7 @@ const sendProgramRequest = async (id, program, requestedBy = null) => {
         {
             replacements: {
                 userId: String(id),
-                program,
+                program: title,
                 requestedBy: requestedBy ? String(requestedBy) : null,
             },
             type: QueryTypes.INSERT,
@@ -532,10 +560,10 @@ const sendProgramRequest = async (id, program, requestedBy = null) => {
                 programResponseStatus = 'pending',
                 programRespondedAt = NULL
           WHERE userId = :userId`,
-        { replacements: { userId: String(id), program }, type: QueryTypes.UPDATE }
+        { replacements: { userId: String(id), program: title }, type: QueryTypes.UPDATE }
     );
 
-    return { message: 'Program request sent', program, user_id: String(id) };
+    return { message: 'Program request sent', program: title, user_id: String(id) };
 };
 
 // Student-facing: the program request an admin sent this student that is

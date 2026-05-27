@@ -1,8 +1,30 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { QueryTypes } = require('sequelize');
 const env = require('../config/env');
+const authDb = require('../config/authDatabase');
 const userRepo = require('../repositories/UserRepository');
 const { HttpError } = require('../middlewares/error');
+
+// Block login when the admin's college has been revoked from Manage Colleges
+// → Options → Revoke Access. Raw SELECT into the shared auth DB (colleges
+// lives there). Root admin has no college_id so this is a no-op for them.
+// Best-effort on DB hiccups — column missing or query failure falls through.
+async function assertCollegeActive(collegeId) {
+    if (!collegeId) return;
+    try {
+        const rows = await authDb.query(
+            'SELECT isActive FROM colleges WHERE clgId = :clgId LIMIT 1',
+            { replacements: { clgId: collegeId }, type: QueryTypes.SELECT }
+        );
+        if (rows.length && Number(rows[0].isActive) === 0) {
+            throw new HttpError(403, 'Your college access has been revoked. Please contact your administrator.');
+        }
+    } catch (e) {
+        if (e instanceof HttpError) throw e;
+        console.warn('[admin-auth] college isActive check skipped:', e.message);
+    }
+}
 
 const sanitize = (u) => {
     const o = u.toJSON ? u.toJSON() : { ...u };
@@ -57,6 +79,12 @@ const login = async ({ email, password }) => {
 
     const rootId = await getRootId();
     const isRootAdmin = user.id === rootId;
+    // Root admin keeps access regardless of college state — they need to be
+    // able to log in and toggle access back on. Everyone else (college-admin
+    // role) gets the gate.
+    if (!isRootAdmin) {
+        await assertCollegeActive(user.college_id);
+    }
     return {
         token: signToken(user, isRootAdmin),
         user: { ...sanitize(user), is_root_admin: isRootAdmin },

@@ -32,6 +32,12 @@ const SectionHeader = ({ title, student }) => {
     try {
       await respondToProgramRequest(action);
       setRequest(null); // banner clears once responded
+      // Notify other mounted pages (My Courses gates on this) that the
+      // accepted-program state just changed. The dashboard keeps every tab
+      // mounted so there's no remount-triggered refetch otherwise.
+      if (action === "accept") {
+        window.dispatchEvent(new CustomEvent("program-request-accepted"));
+      }
       toast.success(
         action === "accept"
           ? "You accepted the program. Our team will reach out."

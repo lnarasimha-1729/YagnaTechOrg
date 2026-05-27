@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listInstructors } from '../../../api/instructor';
 import CollegeMultiSelect from '../../../components/CollegeMultiSelect';
+import BatchMultiSelect from '../../../components/BatchMultiSelect';
 
 // Mirrors the backend parseInstructorIds — instructor_ids comes off the
 // course row as a TEXT column that may hold a JSON array, a CSV string, or a
@@ -52,6 +53,14 @@ export default function BasicTab({ course, onSave, formId }) {
         Array.isArray(course.clg_ids) ? course.clg_ids : [],
     );
 
+    // Batches scoped to selectedClgIds. Pre-selected from course.batch_ids
+    // (JSON column on courses). BatchMultiSelect re-fetches when the college
+    // set changes and prunes selections whose college is no longer active,
+    // so no extra effect is needed here.
+    const [selectedBatchIds, setSelectedBatchIds] = useState(
+        Array.isArray(course.batch_ids) ? course.batch_ids.map(Number) : [],
+    );
+
     // Instructor dropdown source — admin instructors API (auth-service users
     // with role='instructor'). Same loader the Create page uses. We pull the
     // full list in one request; the count is small.
@@ -101,6 +110,14 @@ export default function BasicTab({ course, onSave, formId }) {
             selectedClgIds.forEach((id) => fd.append('clgIds[]', id));
         } else {
             fd.append('clgIds[]', '');
+        }
+        // Same explicit-clear pattern as clgIds[]: send the field even when
+        // empty so the backend's partial-save guard knows we intend to wipe
+        // it rather than leaving the existing batch_ids untouched.
+        if (selectedBatchIds.length > 0) {
+            selectedBatchIds.forEach((id) => fd.append('batchIds[]', id));
+        } else {
+            fd.append('batchIds[]', '');
         }
         onSave(fd);
     };
@@ -176,6 +193,17 @@ export default function BasicTab({ course, onSave, formId }) {
                     value={selectedClgIds}
                     onChange={setSelectedClgIds}
                     hideLabel
+                />
+            </Row>
+
+            {/* BatchMultiSelect renders its own "Batches" label, so we drop
+                Row's label slot to avoid a duplicate. The empty label cell
+                keeps the field aligned with the rest of the form's grid. */}
+            <Row label="">
+                <BatchMultiSelect
+                    clgIds={selectedClgIds}
+                    value={selectedBatchIds}
+                    onChange={setSelectedBatchIds}
                 />
             </Row>
 

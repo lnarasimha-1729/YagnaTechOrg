@@ -5,6 +5,7 @@ import { storeCourse } from '../../api/course';
 import { listInstructors } from '../../api/instructor';
 import { listLanguages } from '../../api/language';
 import CollegeMultiSelect from '../../components/CollegeMultiSelect';
+import BatchMultiSelect from '../../components/BatchMultiSelect';
 
 const STATUS_RADIOS = [
     { id: 'status_active', value: 'active', label: 'Active', color: 'text-success', ring: 'focus:ring-success' },
@@ -64,6 +65,9 @@ export default function CourseCreate() {
     // mandatory-multi-select pattern so cross-entity college filtering is
     // consistent. Sent as clgIds[] on submit.
     const [selectedClgIds, setSelectedClgIds] = useState([]);
+    // Batch IDs scoped to selectedClgIds. BatchMultiSelect prunes invalid
+    // entries when colleges change, so we don't have to here.
+    const [selectedBatchIds, setSelectedBatchIds] = useState([]);
 
     // Instructor dropdown source — admin instructors API
     // (GET /api/admin/manage/instructors). Loaded once on mount; small list,
@@ -121,6 +125,7 @@ export default function CourseCreate() {
         fd.append('course_type', 'general');
         fd.append('instructors[]', form.instructor_id);
         selectedClgIds.forEach((id) => fd.append('clgIds[]', id));
+        selectedBatchIds.forEach((id) => fd.append('batchIds[]', id));
         if (thumbnail) fd.append('thumbnail', thumbnail);
 
         try {
@@ -319,6 +324,14 @@ export default function CourseCreate() {
                                     value={selectedClgIds}
                                     onChange={setSelectedClgIds}
                                     required
+                                />
+                            </div>
+
+                            <div className="mb-3">
+                                <BatchMultiSelect
+                                    clgIds={selectedClgIds}
+                                    value={selectedBatchIds}
+                                    onChange={setSelectedBatchIds}
                                 />
                             </div>
 

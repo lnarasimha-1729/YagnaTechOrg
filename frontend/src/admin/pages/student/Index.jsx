@@ -5,6 +5,9 @@ import { toast } from 'react-toastify';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import Modal from '../../components/Modal';
 import { listStudents, deleteStudent, listStudentColleges, sendProgramRequest } from '../../api/student';
+import { listColleges } from '../../api/college';
+import { listBatchesByColleges } from '../../api/batch';
+import { listProgramsForCollegeBatch } from '../../api/program';
 import { BsThreeDotsVertical } from 'react-icons/bs';
 
 const API = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:4000';
@@ -61,11 +64,23 @@ export default function StudentIndex() {
     };
 
     // College filter → URL param so it composes with search and survives
-    // reload. Empty value clears the filter.
+    // reload. Empty value clears the filter. Changing the college also wipes
+    // the batch filter because a batch is meaningful only inside its college
+    // — leaving a stale batch param would silently empty the table.
     const onCollegeFilter = (value) => {
         const next = { ...query };
         if (value) next.college = value; else delete next.college;
-        delete next.per_page; // keep URL clean; query default re-applies it
+        delete next.batch;
+        delete next.per_page;
+        setParams(next);
+    };
+
+    // Batch filter → URL param. Only meaningful while a college is selected;
+    // the BatchFilter UI enforces that gate so this just round-trips.
+    const onBatchFilter = (value) => {
+        const next = { ...query };
+        if (value) next.batch = value; else delete next.batch;
+        delete next.per_page;
         setParams(next);
     };
 
@@ -136,12 +151,12 @@ export default function StudentIndex() {
                         <div className="w-full md:w-auto">
                             <ExportDropdown onPdf={handlePrint} onPrint={handlePrint} />
                         </div>
-                        {/* Bulk Request + Search college + Search user grouped on the right. */}
+                        {/* Bulk Request + Batch + College search + Search user grouped on the right. */}
                         <div className="flex flex-col md:flex-row md:items-center gap-3">
-                            {/* Bulk Request is only relevant once a college
-                                is chosen — the bulk action targets students
-                                of the selected college. */}
-                            {query.college && (
+                            {/* Bulk Request requires BOTH a college AND a batch
+                                so the bulk action targets a well-scoped group
+                                rather than every student of a college. */}
+                            {query.college && query.batch && (
                                 <button
                                     type="button"
                                     className="ol-btn-primary whitespace-nowrap w-full md:w-auto"
@@ -150,6 +165,16 @@ export default function StudentIndex() {
                                     Bulk Request
                                 </button>
                             )}
+                            {/* Batch sits LEFT of College per the spec; it's
+                                disabled until a college is chosen and only
+                                lists batches that belong to that college. */}
+                            <div className="w-full md:w-[220px]">
+                                <BatchFilter
+                                    collegeName={query.college || ''}
+                                    value={query.batch || ''}
+                                    onChange={onBatchFilter}
+                                />
+                            </div>
                             <div className="w-full md:w-[220px]">
                                 <CollegeFilter
                                     value={query.college || ''}
@@ -168,19 +193,34 @@ export default function StudentIndex() {
                             </form>
                         </div>
                     </div>
-                    {query.college && (
-                        <div className="mb-3">
-                            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-skin/10 text-skin text-[13px] font-medium">
-                                College: {query.college}
-                                <button
-                                    type="button"
-                                    className="text-skin hover:text-danger font-bold"
-                                    onClick={() => onCollegeFilter('')}
-                                    aria-label="Clear college filter"
-                                >
-                                    ×
-                                </button>
-                            </span>
+                    {(query.college || query.batch) && (
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                            {query.college && (
+                                <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-skin/10 text-skin text-[13px] font-medium">
+                                    College: {query.college}
+                                    <button
+                                        type="button"
+                                        className="text-skin hover:text-danger font-bold"
+                                        onClick={() => onCollegeFilter('')}
+                                        aria-label="Clear college filter"
+                                    >
+                                        ×
+                                    </button>
+                                </span>
+                            )}
+                            {query.batch && (
+                                <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-skin/10 text-skin text-[13px] font-medium">
+                                    Batch: {query.batch}
+                                    <button
+                                        type="button"
+                                        className="text-skin hover:text-danger font-bold"
+                                        onClick={() => onBatchFilter('')}
+                                        aria-label="Clear batch filter"
+                                    >
+                                        ×
+                                    </button>
+                                </span>
+                            )}
                         </div>
                     )}
 
@@ -337,6 +377,7 @@ export default function StudentIndex() {
                     <BulkRequestForm
                         students={rows}
                         college={query.college}
+                        batch={query.batch}
                         onDone={() => { setBulkOpen(false); load(); }}
                     />
                 </Modal>
@@ -348,11 +389,30 @@ export default function StudentIndex() {
 // Body of the Bulk Request modal. From / To are 1-based row positions in the
 // current (college-filtered) student list; Send fires the program request to
 // every student in that inclusive range, then refreshes the table via onDone.
-function BulkRequestForm({ students = [], college, onDone }) {
+function BulkRequestForm({ students = [], college, batch, onDone }) {
     const [from, setFrom] = useState('');
     const [to, setTo] = useState('');
     const [program, setProgram] = useState('');
     const [sending, setSending] = useState(false);
+
+    // Programs linked by root admin to this (college, batch). Fetched once
+    // when the modal opens; an empty array surfaces the "nothing to send"
+    // hint and disables Send.
+    const [programs, setPrograms] = useState([]);
+    const [programsLoading, setProgramsLoading] = useState(false);
+    useEffect(() => {
+        if (!college || !batch) {
+            setPrograms([]);
+            return;
+        }
+        let alive = true;
+        setProgramsLoading(true);
+        listProgramsForCollegeBatch({ clgName: college, batchName: batch })
+            .then((res) => { if (alive) setPrograms(res?.programs || []); })
+            .catch(() => { if (alive) setPrograms([]); })
+            .finally(() => { if (alive) setProgramsLoading(false); });
+        return () => { alive = false; };
+    }, [college, batch]);
 
     const total = students.length;
     const fromN = Number(from);
@@ -361,7 +421,7 @@ function BulkRequestForm({ students = [], college, onDone }) {
         from !== '' && to !== '' &&
         Number.isInteger(fromN) && Number.isInteger(toN) &&
         fromN >= 1 && toN >= fromN && toN <= total;
-    const canSend = rangeValid && program !== '' && !sending;
+    const canSend = rangeValid && program !== '' && !sending && programs.length > 0;
 
     // Inclusive 1-based range → slice of the students array.
     const targets = rangeValid ? students.slice(fromN - 1, toN) : [];
@@ -399,6 +459,7 @@ function BulkRequestForm({ students = [], college, onDone }) {
         <div>
             <p className="text-[13px] text-gray mb-3">
                 {college ? <>College: <span className="font-semibold text-dark">{college}</span> · </> : null}
+                {batch ? <>Batch: <span className="font-semibold text-dark">{batch}</span> · </> : null}
                 {total} student{total === 1 ? '' : 's'} listed. Enter a row range
                 (1–{total}) and pick a program.
             </p>
@@ -437,11 +498,17 @@ function BulkRequestForm({ students = [], college, onDone }) {
                         className="ol-form-control"
                         value={program}
                         onChange={(e) => setProgram(e.target.value)}
-                        disabled={sending}
+                        disabled={sending || programsLoading || programs.length === 0}
                     >
-                        <option value="">Select a program</option>
-                        {PROGRAM_OPTIONS.map((p) => (
-                            <option key={p} value={p}>{p}</option>
+                        <option value="">
+                            {programsLoading
+                                ? 'Loading programs…'
+                                : programs.length === 0
+                                    ? 'No programs linked to this batch'
+                                    : 'Select a program'}
+                        </option>
+                        {programs.map((p) => (
+                            <option key={p.id} value={p.title}>{p.title}</option>
                         ))}
                     </select>
                 </div>
@@ -458,6 +525,12 @@ function BulkRequestForm({ students = [], college, onDone }) {
             </div>
 
             {/* Inline validation hint + selection preview. */}
+            {!programsLoading && programs.length === 0 && (
+                <p className="text-[12px] text-amber-700 mt-2">
+                    No programs are linked to <strong>{college}</strong> /
+                    <strong> {batch}</strong>. Link one in Manage Programs first.
+                </p>
+            )}
             {from !== '' && to !== '' && !rangeValid && (
                 <p className="text-[12px] text-danger mt-2">
                     Enter a valid range between 1 and {total}, with “From” ≤ “To”.
@@ -473,11 +546,6 @@ function BulkRequestForm({ students = [], college, onDone }) {
     );
 }
 
-const PROGRAM_OPTIONS = [
-    'AI Frontier Program',
-    'AI Frontier Plus Program',
-    'Elite AI Residency',
-];
 
 // Enrolled courses chip strip. Shows up to two chips inline; the rest collapse
 // into a "+N more" pill with a tooltip listing the overflow titles. Empty
@@ -569,6 +637,29 @@ function ProgramRequestCell({ student }) {
     const [sending, setSending] = useState(false);
     const [sentProgram, setSentProgram] = useState(student.program_request || '');
 
+    // Programs linked by root admin to THIS student's (college, batch).
+    // Fetched per-row because each student can sit in a different batch.
+    // A row with no college or no batch shows an empty list — the admin
+    // needs to assign the student first.
+    const [programs, setPrograms] = useState([]);
+    const [programsLoading, setProgramsLoading] = useState(false);
+    useEffect(() => {
+        if (!student.college || !student.batch) {
+            setPrograms([]);
+            return;
+        }
+        let alive = true;
+        setProgramsLoading(true);
+        listProgramsForCollegeBatch({
+            clgName: student.college,
+            batchName: student.batch,
+        })
+            .then((res) => { if (alive) setPrograms(res?.programs || []); })
+            .catch(() => { if (alive) setPrograms([]); })
+            .finally(() => { if (alive) setProgramsLoading(false); });
+        return () => { alive = false; };
+    }, [student.college, student.batch]);
+
     const onSend = async () => {
         if (!program || sending) return;
         setSending(true);
@@ -583,17 +674,27 @@ function ProgramRequestCell({ student }) {
         }
     };
 
+    const noScope = !student.college || !student.batch;
     return (
         <div className="flex items-center gap-2">
             <select
                 className="ol-form-control text-[13px] min-w-[170px]"
                 value={program}
                 onChange={(e) => setProgram(e.target.value)}
-                disabled={sending}
+                disabled={sending || programsLoading || programs.length === 0}
+                title={noScope ? 'Assign a college and batch first' : undefined}
             >
-                <option value="">Select program</option>
-                {PROGRAM_OPTIONS.map((p) => (
-                    <option key={p} value={p}>{p}</option>
+                <option value="">
+                    {noScope
+                        ? 'Needs college + batch'
+                        : programsLoading
+                            ? 'Loading…'
+                            : programs.length === 0
+                                ? 'No programs linked'
+                                : 'Select program'}
+                </option>
+                {programs.map((p) => (
+                    <option key={p.id} value={p.title}>{p.title}</option>
                 ))}
             </select>
             <button
@@ -709,6 +810,149 @@ function CollegeFilter({ value, onChange }) {
                                     onClick={() => pick(c)}
                                 >
                                     {c}
+                                </button>
+                            </li>
+                        ))
+                    )}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+// Searchable batch dropdown sitting next to CollegeFilter. It's a no-op
+// (greyed out) until a college is chosen — the spec is "enable after college
+// is selected". The dropdown lists every batch belonging to that college via
+// listBatchesByColleges([clgId]); the value is the batch NAME so it matches
+// what the backend filter compares against (s.batch === requestedBatch).
+function BatchFilter({ collegeName, value, onChange }) {
+    const [batches, setBatches] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [open, setOpen] = useState(false);
+    const [term, setTerm] = useState('');
+    const boxRef = useRef(null);
+
+    // Maintain a clgName -> clgId map so we can call listBatchesByColleges
+    // (which takes ids) from a name picked in CollegeFilter (which returns
+    // names). Cached once at mount — colleges don't change often.
+    const [nameToClgId, setNameToClgId] = useState({});
+    useEffect(() => {
+        let alive = true;
+        listColleges({ per_page: 1000 })
+            .then((res) => {
+                if (!alive) return;
+                const map = {};
+                (res.colleges || []).forEach((c) => { map[c.clgName] = c.clgId; });
+                setNameToClgId(map);
+            })
+            .catch(() => { /* batch filter just shows "no batches" */ });
+        return () => { alive = false; };
+    }, []);
+
+    // Re-fetch batches whenever the selected college changes. Empty college
+    // → cleared list (and the input stays disabled, see render below).
+    useEffect(() => {
+        if (!collegeName) {
+            setBatches([]);
+            return;
+        }
+        const clgId = nameToClgId[collegeName];
+        if (!clgId) {
+            // The college might be a legacy free-text value with no row in
+            // the colleges table; nothing to look up.
+            setBatches([]);
+            return;
+        }
+        let alive = true;
+        setLoading(true);
+        listBatchesByColleges([clgId])
+            .then((res) => { if (alive) setBatches(res?.batches || []); })
+            .catch(() => { if (alive) setBatches([]); })
+            .finally(() => { if (alive) setLoading(false); });
+        return () => { alive = false; };
+    }, [collegeName, nameToClgId]);
+
+    useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+        const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+        document.addEventListener('mousedown', onDoc);
+        document.addEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('mousedown', onDoc);
+            document.removeEventListener('keydown', onKey);
+        };
+    }, [open]);
+
+    const filtered = term
+        ? batches.filter((b) => (b.name || '').toLowerCase().includes(term.toLowerCase()))
+        : batches;
+
+    const pick = (name) => {
+        onChange(name);
+        setTerm('');
+        setOpen(false);
+    };
+
+    const disabled = !collegeName;
+
+    return (
+        <div className="relative" ref={boxRef}>
+            <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray pointer-events-none">
+                    <i className="fi-rr-search" />
+                </span>
+                <input
+                    className={`ol-form-control w-full pl-9 pr-8 ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                    type="text"
+                    placeholder={disabled ? 'Select college first…' : (loading ? 'Loading batches…' : 'Search batch…')}
+                    value={open ? term : (value || '')}
+                    onFocus={() => { if (!disabled) { setOpen(true); setTerm(''); } }}
+                    onChange={(e) => { if (!disabled) { setTerm(e.target.value); setOpen(true); } }}
+                    disabled={disabled}
+                />
+                {!disabled && (value || (open && term)) && (
+                    <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray hover:text-danger font-bold px-1"
+                        aria-label="Clear batch filter"
+                        onClick={() => { setTerm(''); onChange(''); setOpen(false); }}
+                    >
+                        ×
+                    </button>
+                )}
+            </div>
+            {open && !disabled && (
+                <ul className="absolute left-0 right-0 z-30 mt-1 max-h-64 overflow-auto bg-white border border-border rounded-ol-8 shadow-lg py-1 text-[13px]">
+                    {term && (
+                        <li className="px-3 py-1 text-[11px] text-gray border-b border-border">
+                            {filtered.length} match{filtered.length === 1 ? '' : 'es'} for “{term}”
+                        </li>
+                    )}
+                    <li>
+                        <button
+                            type="button"
+                            className="w-full text-left px-3 py-2 text-gray hover:bg-gray-50"
+                            onClick={() => pick('')}
+                        >
+                            All batches
+                        </button>
+                    </li>
+                    {filtered.length === 0 ? (
+                        <li className="px-3 py-2 text-gray">
+                            {loading ? 'Loading…' : 'No batches for this college'}
+                        </li>
+                    ) : (
+                        filtered.map((b) => (
+                            <li key={b.id}>
+                                <button
+                                    type="button"
+                                    className={`w-full text-left px-3 py-2 hover:bg-gray-50 ${
+                                        b.name === value ? 'text-skin font-semibold' : 'text-dark'
+                                    }`}
+                                    onClick={() => pick(b.name)}
+                                >
+                                    {b.name}
                                 </button>
                             </li>
                         ))

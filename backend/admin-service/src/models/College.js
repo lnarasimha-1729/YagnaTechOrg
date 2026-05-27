@@ -31,6 +31,14 @@ const College = authDb.define('College', {
         type: DataTypes.JSON,
         allowNull: true,
     },
+    // Toggled from Manage Colleges → Options → Revoke / Give Access.
+    // Defaults true so existing rows (where the column is added on the fly
+    // via the startup ALTER in server.js) remain accessible by default.
+    isActive: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
+    },
 }, {
     tableName: 'colleges',
     timestamps: true,

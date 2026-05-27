@@ -13,40 +13,14 @@ import { Label } from "@/components/ui/label";
 import { CheckCircle2, FileText, Loader2, UploadCloud, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  PRE_ASSESSMENT_PROGRAMS,
+  EligibleProgram,
+  getEligiblePrograms,
   PreAssessmentGender,
   PreAssessmentProgram,
   submitPreAssessmentRegistration,
 } from "@/api/preAssessmentRegistrationApi";
 
 const GENDER_OPTIONS: PreAssessmentGender[] = ["Male", "Female", "Other"];
-
-const PROGRAM_DETAILS: Record<
-  PreAssessmentProgram,
-  { tagline: string; bullets: string[] }
-> = {
-  "AI Frontier": {
-    tagline: "Foundational virtual program",
-    bullets: [
-      "6 months virtual comprehensive program",
-      "Live program delivered by industry experts",
-    ],
-  },
-  "AI Frontier Plus": {
-    tagline: "Frontier + corporate experience",
-    bullets: [
-      "All the benefits of AI Frontier Program",
-      "2 months of hands-on corporate experience",
-    ],
-  },
-  "Elite AI Residency": {
-    tagline: "On-site residency engagement",
-    bullets: [
-      "All the benefits of AI Frontier Program",
-      "6 months on-site corporate engagement",
-    ],
-  },
-};
 
 const ACCEPTED_MIME = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
 const ACCEPTED_EXT = [".pdf", ".jpg", ".jpeg", ".png"];
@@ -60,6 +34,7 @@ type FormState = {
   email: string;
   phoneNumber: string;
   gender: PreAssessmentGender | "";
+  selectedProgramId: number | null;
   selectedProgram: PreAssessmentProgram | "";
   collegeProof: File | null;
   declarationAccurate: boolean;
@@ -71,6 +46,7 @@ const INITIAL_STATE: FormState = {
   email: "",
   phoneNumber: "",
   gender: "",
+  selectedProgramId: null,
   selectedProgram: "",
   collegeProof: null,
   declarationAccurate: false,
@@ -97,6 +73,39 @@ export function PreAssessmentOnboardingModal({
   const [submitting, setSubmitting] = React.useState(false);
   const [dragActive, setDragActive] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Admin-created programs the student is eligible for (matched server side
+  // by college + batch + enrolled-course). Fetched fresh every time the
+  // modal opens so a newly-published program shows up without a page reload.
+  const [eligible, setEligible] = React.useState<EligibleProgram[]>([]);
+  const [eligibleLoading, setEligibleLoading] = React.useState(false);
+  const [eligibleError, setEligibleError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setEligibleLoading(true);
+    setEligibleError(null);
+    getEligiblePrograms()
+      .then((res) => {
+        if (!alive) return;
+        setEligible(Array.isArray(res.data?.programs) ? res.data.programs : []);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        const msg =
+          (err as { response?: { data?: { message?: string } } })?.response?.data
+            ?.message || "Could not load programs";
+        setEligibleError(msg);
+        setEligible([]);
+      })
+      .finally(() => {
+        if (alive) setEligibleLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
 
   // Hydrate form with logged-in profile defaults whenever the modal opens.
   React.useEffect(() => {
@@ -137,7 +146,8 @@ export function PreAssessmentOnboardingModal({
       next.phoneNumber = "Enter a valid phone number (7-20 digits)";
 
     if (!state.gender) next.gender = "Select your gender";
-    if (!state.selectedProgram) next.selectedProgram = "Please choose a program";
+    if (!state.selectedProgramId || !state.selectedProgram)
+      next.selectedProgram = "Please choose a program";
 
     if (!state.collegeProof) next.collegeProof = "Upload your college ID / proof";
     else {
@@ -191,6 +201,7 @@ export function PreAssessmentOnboardingModal({
         email: form.email.trim().toLowerCase(),
         phoneNumber: form.phoneNumber.trim(),
         gender: form.gender as PreAssessmentGender,
+        selectedProgramId: form.selectedProgramId as number,
         selectedProgram: form.selectedProgram as PreAssessmentProgram,
         declarationAccepted: allDeclarationsAccepted,
         collegeProof: form.collegeProof as File,
@@ -301,7 +312,10 @@ export function PreAssessmentOnboardingModal({
             </div>
           </section>
 
-          {/* Program selection */}
+          {/* Program selection — driven by admin-created programs that match
+              the student's college / batch / enrolled courses. Loading and
+              empty states are explicit so a student knows whether to wait,
+              contact admin, or pick. */}
           <section className="space-y-3">
             <div className="flex items-baseline justify-between">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-[#177385]">
@@ -309,71 +323,105 @@ export function PreAssessmentOnboardingModal({
               </h3>
               <span className="text-xs text-gray-500">Select one</span>
             </div>
-            <div
-              role="radiogroup"
-              aria-label="Program Interested"
-              aria-invalid={!!errors.selectedProgram}
-              className="grid grid-cols-1 md:grid-cols-3 gap-3"
-            >
-              {PRE_ASSESSMENT_PROGRAMS.map((program) => {
-                const meta = PROGRAM_DETAILS[program];
-                const isSelected = form.selectedProgram === program;
-                return (
-                  <button
-                    type="button"
-                    key={program}
-                    onClick={() => update("selectedProgram", program)}
-                    role="radio"
-                    aria-checked={isSelected}
-                    className={cn(
-                      "group relative text-left rounded-xl border p-4 transition-all duration-200",
-                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-[#177385] focus-visible:ring-offset-2",
-                      isSelected
-                        ? "border-[#177385] bg-[#177385]/5 shadow-md"
-                        : "border-gray-200 hover:border-[#177385]/50 hover:shadow-sm"
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p
+
+            {eligibleLoading ? (
+              <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading programs…
+              </div>
+            ) : eligibleError ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+                {eligibleError}
+              </div>
+            ) : eligible.length === 0 ? (
+              <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-4 text-sm text-gray-700">
+                No programs are available for your college/batch yet — please
+                contact your administrator.
+              </div>
+            ) : (
+              <div
+                role="radiogroup"
+                aria-label="Program Interested"
+                aria-invalid={!!errors.selectedProgram}
+                className="grid grid-cols-1 md:grid-cols-3 gap-3"
+              >
+                {eligible.map((program) => {
+                  const isSelected = form.selectedProgramId === program.id;
+                  const bullets = Array.isArray(program.features)
+                    ? program.features
+                    : [];
+                  return (
+                    <button
+                      type="button"
+                      key={program.id}
+                      onClick={() => {
+                        update("selectedProgramId", program.id);
+                        update("selectedProgram", program.title);
+                      }}
+                      role="radio"
+                      aria-checked={isSelected}
+                      className={cn(
+                        "group relative text-left rounded-xl border p-4 transition-all duration-200",
+                        "focus:outline-none focus-visible:ring-2 focus-visible:ring-[#177385] focus-visible:ring-offset-2",
+                        isSelected
+                          ? "border-[#177385] bg-[#177385]/5 shadow-md"
+                          : "border-gray-200 hover:border-[#177385]/50 hover:shadow-sm"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p
+                            className={cn(
+                              "text-sm font-semibold leading-tight",
+                              isSelected ? "text-[#177385]" : "text-gray-800"
+                            )}
+                          >
+                            {program.title}
+                          </p>
+                          {program.tagline && (
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              {program.tagline}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          aria-hidden
                           className={cn(
-                            "text-sm font-semibold leading-tight",
-                            isSelected ? "text-[#177385]" : "text-gray-800"
+                            "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition",
+                            isSelected
+                              ? "border-[#177385] bg-[#177385]"
+                              : "border-gray-300 bg-white"
                           )}
                         >
-                          {program}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-0.5">{meta.tagline}</p>
+                          {isSelected && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                          )}
+                        </span>
                       </div>
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition",
-                          isSelected
-                            ? "border-[#177385] bg-[#177385]"
-                            : "border-gray-300 bg-white"
-                        )}
-                      >
-                        {isSelected && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
-                      </span>
-                    </div>
-                    <ul className="mt-3 space-y-1.5">
-                      {meta.bullets.map((b) => (
-                        <li key={b} className="flex items-start gap-1.5 text-xs text-gray-600">
-                          <CheckCircle2
-                            className={cn(
-                              "h-3.5 w-3.5 mt-0.5 shrink-0",
-                              isSelected ? "text-[#177385]" : "text-gray-400"
-                            )}
-                          />
-                          <span>{b}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </button>
-                );
-              })}
-            </div>
+                      {bullets.length > 0 && (
+                        <ul className="mt-3 space-y-1.5">
+                          {bullets.map((b) => (
+                            <li
+                              key={b}
+                              className="flex items-start gap-1.5 text-xs text-gray-600"
+                            >
+                              <CheckCircle2
+                                className={cn(
+                                  "h-3.5 w-3.5 mt-0.5 shrink-0",
+                                  isSelected ? "text-[#177385]" : "text-gray-400"
+                                )}
+                              />
+                              <span>{b}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {errors.selectedProgram && (
               <p className="text-xs text-red-600 mt-1">{errors.selectedProgram}</p>
             )}
@@ -508,7 +556,13 @@ export function PreAssessmentOnboardingModal({
             </Button>
             <Button
               type="submit"
-              disabled={submitting || !allDeclarationsAccepted}
+              disabled={
+                submitting ||
+                !allDeclarationsAccepted ||
+                eligibleLoading ||
+                eligible.length === 0 ||
+                !form.selectedProgramId
+              }
               className={cn(
                 "rounded-lg bg-[#177385] text-white hover:bg-[#135f6e] transition-all shadow-md min-w-[160px]",
                 "disabled:bg-gray-300 disabled:text-gray-600 disabled:cursor-not-allowed disabled:shadow-none"

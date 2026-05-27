@@ -319,7 +319,7 @@ function PricingCard({ course, onPreview, onEnroll, enrolling }) {
                             </>
                         ) : (
                             <>
-                                {isFree ? 'Enrol for free' : 'Buy this course'}
+                                {isFree ? 'Go to Course' : 'Buy this course'}
                                 <i className="fa fa-arrow-right text-[12px]" />
                             </>
                         )}

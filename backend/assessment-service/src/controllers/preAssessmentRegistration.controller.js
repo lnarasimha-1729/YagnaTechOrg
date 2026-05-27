@@ -7,6 +7,7 @@ import {
   markAssessmentStarted,
 } from "../services/preAssessmentRegistration.service.js";
 import { PROOF_PUBLIC_PATH } from "../middlewares/uploadProof.js";
+import { enqueueEmail } from "../helpers/adminEmailClient.js";
 
 // Centralised JSON response shape — keeps clients consistent with the rest of
 // the assessment service (`{ message, data?, errors? }`).
@@ -31,6 +32,7 @@ export async function submitRegistration(req, res) {
       phoneNumber,
       gender,
       selectedProgram,
+      selectedProgramId,
       declarationAccepted,
     } = req.validatedBody;
 
@@ -65,11 +67,30 @@ export async function submitRegistration(req, res) {
       phoneNumber,
       gender,
       selectedProgram,
+      selectedProgramId,
       declarationAccepted,
       uploadedCollegeProof: proofMeta,
       assessmentStatus: "registered",
       submittedFromIp: req.ip,
       submittedUserAgent: (req.headers["user-agent"] || "").slice(0, 255),
+    });
+
+    // Fire-and-forget confirmation email via admin-service's queue. NOT
+    // awaited: the registration already persisted, and SMTP latency must
+    // not block the 201 response. enqueueEmail() swallows its own errors,
+    // so a failed dispatch is logged but doesn't surface to the user.
+    enqueueEmail({
+      template: "preAssessmentRegistered",
+      to: email,
+      userId: userId || null,
+      data: {
+        studentName: fullName,
+        programName: selectedProgram,
+        // adminEmailClient leaves the loginUrl to the admin-service template
+        // default (env.mail.lmsLoginUrl), so the link stays consistent with
+        // the batch-added email even though they originate in different
+        // services.
+      },
     });
 
     return ok(res, registration, 201);

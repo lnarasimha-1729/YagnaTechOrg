@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import CollegeMultiSelect from '../../components/CollegeMultiSelect';
 import CourseMultiSelect from '../../components/CourseMultiSelect';
+import BatchMultiSelect from '../../components/BatchMultiSelect';
+import { listCourses } from '../../api/course';
 
 // Curated icon set to match the existing public ProgramCard renderer
 // (frontend/src/components/programs/ProgramCard.tsx uses lucide-react). Any
@@ -44,6 +46,46 @@ export default function ProgramForm({ initial = {}, onSubmit, submitting = false
         if (initial.course_id) return [String(initial.course_id)];
         return [];
     });
+    // Batches scoped to selectedClgIds. BatchMultiSelect re-fetches when the
+    // college set changes and prunes selections whose college is no longer
+    // active, so no extra effect is needed here.
+    const [selectedBatchIds, setSelectedBatchIds] = useState(
+        Array.isArray(initial.batch_ids) ? initial.batch_ids.map(Number) : [],
+    );
+
+    // Pull every course's batch_ids once so we can union them per selection
+    // and tell BatchMultiSelect which batches are linked to the chosen courses.
+    // Best-effort: a fetch failure leaves the map empty, which falls through
+    // to "no narrowing" (admin can still pick freely from the college batches).
+    const [coursesById, setCoursesById] = useState({});
+    useEffect(() => {
+        let alive = true;
+        listCourses({})
+            .then((r) => {
+                if (!alive) return;
+                const rows = Array.isArray(r?.courses?.data) ? r.courses.data : [];
+                const map = {};
+                rows.forEach((c) => { map[String(c.id)] = c; });
+                setCoursesById(map);
+            })
+            .catch(() => { /* best-effort — null map disables course-based narrowing */ });
+        return () => { alive = false; };
+    }, []);
+
+    // Strict union of batch_ids across the admin's selected courses. Unlike
+    // earlier behavior, this NEVER falls back to "all college batches" — the
+    // flow is college → course → batch, so batches must come from the courses
+    // themselves. Returns an empty Set when no course has batch_ids, which
+    // BatchMultiSelect renders as "no batches available".
+    const allowedBatchIds = useMemo(() => {
+        const union = new Set();
+        for (const id of selectedCourseIds) {
+            const course = coursesById[String(id)];
+            const ids = Array.isArray(course?.batch_ids) ? course.batch_ids : [];
+            ids.forEach((b) => union.add(Number(b)));
+        }
+        return union;
+    }, [selectedCourseIds, coursesById]);
 
     const set = (k, v) => setForm((s) => ({ ...s, [k]: v }));
 
@@ -69,6 +111,7 @@ export default function ProgramForm({ initial = {}, onSubmit, submitting = false
             features: cleanedFeatures,
             clgIds: selectedClgIds,
             courseIds: selectedCourseIds,
+            batchIds: selectedBatchIds,
         });
     };
 
@@ -112,6 +155,17 @@ export default function ProgramForm({ initial = {}, onSubmit, submitting = false
                     onChange={setSelectedCourseIds}
                     clgIds={selectedClgIds}
                     required
+                />
+            </div>
+
+            <div className="mb-3">
+                <BatchMultiSelect
+                    clgIds={selectedClgIds}
+                    value={selectedBatchIds}
+                    onChange={setSelectedBatchIds}
+                    allowedBatchIds={allowedBatchIds}
+                    requireCourses
+                    hasCourseSelection={selectedCourseIds.length > 0}
                 />
             </div>
 

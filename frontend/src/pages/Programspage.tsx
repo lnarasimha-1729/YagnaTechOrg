@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, CheckCircle2 } from "lucide-react";
 import { getProfile } from "@/api/authApi";
 import { getUserProgress } from "@/api/userProgressApi";
 
@@ -18,11 +18,14 @@ interface CourseCard {
   banner?: string;
   level?: string;
   language?: string;
+  lesson_count?: number;
+  completed_lesson_count?: number;
+  progress_pct?: number;
 }
 
 const ADMIN_BASE = (import.meta.env.VITE_ADMIN_API_URL as string) || "http://localhost:4000";
-// Pre-assessment pass threshold. Matches Assesments.jsx so the "Completed" label
-// and the Programs unlock stay in sync.
+// Pre-assessment pass threshold. Matches Assesments.jsx so the "Completed"
+// label and the My Courses unlock stay in sync.
 const PRE_ASSESSMENT_PASS = 60;
 
 const ProgramsPage = () => {
@@ -35,7 +38,12 @@ const ProgramsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Single cached gate status (existing pre-assessment is global, not
-  // per-course). Once the user passes the pre-assessment, every card unlocks.
+  // Course cards on My Courses unlock once the student passes the
+  // pre-assessment (preScore >= PRE_ASSESSMENT_PASS). The per-program
+  // gate (accept) lives on the next page (ProgramsForCourse) so the
+  // student CAN land here from any path and still see their courses,
+  // even before any program request was sent. null while the profile
+  // lookup is in flight.
   const [gatePassed, setGatePassed] = useState<boolean | null>(null);
   // Has the student picked a college on their Profile? Until this is true,
   // My Courses renders an empty-state CTA instead of any course cards —
@@ -64,18 +72,18 @@ const ProgramsPage = () => {
       try {
         const res = await getProfile();
         const data = (res.data as any) || {};
-        const score = Number(data.preScore);
         clgId = (data.collegeId as string) || "";
+        const score = Number(data.preScore);
         if (!cancelled) {
-          setGatePassed(Number.isFinite(score) && score >= PRE_ASSESSMENT_PASS);
           setHasCollege(Boolean(clgId));
+          setGatePassed(Number.isFinite(score) && score >= PRE_ASSESSMENT_PASS);
         }
       } catch {
         if (!cancelled) {
-          setGatePassed(false);
           setHasCollege(false);
+          setGatePassed(false);
+          setLoading(false);
         }
-        if (!cancelled) setLoading(false);
         return;
       }
 
@@ -87,8 +95,14 @@ const ProgramsPage = () => {
       }
 
       try {
+        // user_id (read from localStorage like the other student-facing
+        // public endpoints) lets the backend narrow college-scoped courses
+        // to ones linked to the student's batch. Omitting it falls back to
+        // the prior college-only behavior.
+        const userId = localStorage.getItem("userId") || undefined;
         const { data } = await axios.get(`${ADMIN_BASE}/api/public/courses`, {
-          params: { clgId },
+          params: userId ? { clgId, user_id: userId } : { clgId },
+          headers: userId ? { "x-user-id": String(userId) } : undefined,
           timeout: 30000,
         });
         if (cancelled) return;
@@ -180,11 +194,12 @@ const ProgramsPage = () => {
 
         <div className="grid md:grid-cols-2 gap-6">
           {!loading && !progressLoading && hasCollege === true && courses.map((course) => {
-            // Default to locked until the pre-assessment gate has resolved
-            // as passed. While gatePassed is null (initial mount, network in
-            // flight) the button stays disabled — otherwise it briefly
-            // appears clickable, letting the student through before the gate
-            // check returned.
+            // A card unlocks when the student has passed the pre-assessment
+            // (preScore >= PRE_ASSESSMENT_PASS). The per-program accept gate
+            // lives on the next page (ProgramsForCourse) — once a course is
+            // open the student picks WHICH program to enroll through, and
+            // that's where the program_requests.status === 'accepted' check
+            // applies.
             const locked = gatePassed !== true;
             // Per-course enrolment isn't on this list payload, so we use the
             // global enrolled target: if the student has an active enrolment,
@@ -263,11 +278,103 @@ const ProgramsPage = () => {
                       </span>
                     )}
                   </div>
-                  {locked && (
+                  {locked ? (
                     <p className="text-xs text-gray-500 mt-3">
                       Complete Pre-Assessment to unlock
                     </p>
-                  )}
+                  ) : (() => {
+                    // Donut progress — server-computed pct from
+                    // lesson_completions / total lessons, so it stays in sync
+                    // with what the player records when a lesson is watched.
+                    const pct = Math.max(0, Math.min(100, Number(course.progress_pct) || 0));
+                    const done = Number(course.completed_lesson_count) || 0;
+                    const total = Number(course.lesson_count) || 0;
+                    const isComplete = total > 0 && pct >= 100;
+                    const notStarted = done === 0;
+                    const SIZE = 40;
+                    const STROKE = 4;
+                    const RADIUS = (SIZE - STROKE) / 2;
+                    const CIRC = 2 * Math.PI * RADIUS;
+                    const dashOffset = CIRC * (1 - pct / 100);
+                    const ringColor = isComplete ? "#059669" : "#177385";
+                    const ringGlow = isComplete ? "#34d399" : "#1f8a9f";
+                    const gradId = `cp-grad-${course.id}`;
+                    return (
+                      <div className="mt-3 flex items-center gap-3">
+                        <div
+                          className="relative shrink-0"
+                          style={{ width: SIZE, height: SIZE }}
+                          role="progressbar"
+                          aria-valuenow={pct}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-label={`Course progress: ${pct}%`}
+                        >
+                          <svg
+                            width={SIZE}
+                            height={SIZE}
+                            viewBox={`0 0 ${SIZE} ${SIZE}`}
+                            className="-rotate-90"
+                          >
+                            <defs>
+                              <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stopColor={ringGlow} />
+                                <stop offset="100%" stopColor={ringColor} />
+                              </linearGradient>
+                            </defs>
+                            <circle
+                              cx={SIZE / 2}
+                              cy={SIZE / 2}
+                              r={RADIUS}
+                              fill="none"
+                              stroke="#eef2f5"
+                              strokeWidth={STROKE}
+                            />
+                            <circle
+                              cx={SIZE / 2}
+                              cy={SIZE / 2}
+                              r={RADIUS}
+                              fill="none"
+                              stroke={`url(#${gradId})`}
+                              strokeWidth={STROKE}
+                              strokeLinecap="round"
+                              strokeDasharray={CIRC}
+                              strokeDashoffset={dashOffset}
+                              style={{ transition: "stroke-dashoffset 600ms ease" }}
+                            />
+                          </svg>
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            {isComplete ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                            ) : (
+                              <span className="text-[10px] font-bold text-[#177385] leading-none">
+                                {pct}
+                                <span className="text-[7px] font-semibold">%</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <p className={
+                            isComplete
+                              ? "text-xs font-semibold text-emerald-700"
+                              : "text-xs font-semibold text-gray-800"
+                          }>
+                            {isComplete
+                              ? "Course completed"
+                              : notStarted
+                                ? "Not started yet"
+                                : "Your progress"}
+                          </p>
+                          {total > 0 && (
+                            <p className="text-[11px] text-gray-500 mt-0.5">
+                              {done} of {total} lesson{total === 1 ? "" : "s"} completed
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             );

@@ -44,7 +44,7 @@ const list = async ({ page = 1, per_page = 10, search = '' } = {}) => {
             limit,
             offset,
             order: [['clgName', 'ASC']],
-            attributes: ['clgId', 'clgName', 'clgAddress', 'orgId', 'branchIds', 'createdAt', 'updatedAt'],
+            attributes: ['clgId', 'clgName', 'clgAddress', 'orgId', 'branchIds', 'isActive', 'createdAt', 'updatedAt'],
         });
 
         // Batch counts live in the admin DB (batches.clg_id), so we tally
@@ -86,7 +86,7 @@ const list = async ({ page = 1, per_page = 10, search = '' } = {}) => {
 
 const get = async (clgId) => {
     const college = await College.findByPk(clgId, {
-        attributes: ['clgId', 'clgName', 'clgAddress', 'orgId', 'branchIds', 'createdAt', 'updatedAt'],
+        attributes: ['clgId', 'clgName', 'clgAddress', 'orgId', 'branchIds', 'isActive', 'createdAt', 'updatedAt'],
     });
     if (!college) throw new HttpError(404, 'College not found');
     return { college: college.toJSON() };
@@ -154,4 +154,14 @@ const remove = async (clgId) => {
     return { message: 'College deleted successfully' };
 };
 
-module.exports = { list, get, create, update, remove };
+const setAccess = async (clgId, isActive) => {
+    const college = await College.findByPk(clgId);
+    if (!college) throw new HttpError(404, 'College not found');
+    await college.update({ isActive: Boolean(isActive) });
+    return {
+        message: isActive ? 'Access granted' : 'Access revoked',
+        college: college.toJSON(),
+    };
+};
+
+module.exports = { list, get, create, update, remove, setAccess };

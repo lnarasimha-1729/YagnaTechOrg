@@ -3,7 +3,7 @@ const sectionRepo = require('../repositories/SectionRepository');
 const lessonRepo = require('../repositories/LessonRepository');
 const questionRepo = require('../repositories/QuestionRepository');
 const quizSubmissionRepo = require('../repositories/QuizSubmissionRepository');
-const { User, Course } = require('../models');
+const { User, Course, BatchMember, Lesson, LessonCompletion } = require('../models');
 const watchStore = require('./watchStore');
 const { QueryTypes } = require('sequelize');
 const authDb = require('../config/authDatabase');
@@ -245,12 +245,96 @@ const list = async (query = {}) => {
         offset,
     });
 
+    // Strict student-scope gate: when user_id is supplied, only courses
+    // whose batch_ids overlap one of the student's batches surface. The
+    // admin links every course to specific batches, so unscoped courses
+    // and courses missed by the student's memberships must NOT leak through.
+    // Anonymous callers (no user_id) still get the college-only result —
+    // they're public catalog browsers, not enrolled students.
+    const userIdRaw = query.user_id;
+    let filteredRows = rows;
+    if (userIdRaw) {
+        const memberRows = await BatchMember.findAll({
+            where: { user_id: String(userIdRaw) },
+            attributes: ['batch_id'],
+            raw: true,
+        }).catch(() => []);
+        const studentBatchIds = new Set(
+            memberRows.map((r) => Number(r.batch_id)).filter((n) => Number.isFinite(n))
+        );
+        if (studentBatchIds.size === 0) {
+            filteredRows = [];
+        } else {
+            filteredRows = rows.filter((r) => {
+                const cb = Array.isArray(r.batch_ids) ? r.batch_ids : [];
+                if (cb.length === 0) return false;
+                return cb.some((id) => studentBatchIds.has(Number(id)));
+            });
+        }
+    }
+
+    // Per-course progress hydration for the signed-in student. We batch two
+    // cheap aggregate queries (lesson count per course, completion count per
+    // course for this user) so the card list can render a progress bar without
+    // each card refetching the player payload.
+    const progressByCourse = new Map();
+    const uidNum = Number(userIdRaw);
+    if (Number.isFinite(uidNum) && uidNum > 0 && filteredRows.length) {
+        const courseIds = filteredRows.map((r) => r.id);
+        try {
+            const [lessonTotals, completionTotals] = await Promise.all([
+                Lesson.findAll({
+                    attributes: [
+                        'course_id',
+                        [Course.sequelize.fn('COUNT', Course.sequelize.col('id')), 'total'],
+                    ],
+                    where: { course_id: courseIds },
+                    group: ['course_id'],
+                    raw: true,
+                }),
+                LessonCompletion.findAll({
+                    attributes: [
+                        'course_id',
+                        [Course.sequelize.fn('COUNT', Course.sequelize.col('id')), 'done'],
+                    ],
+                    where: { course_id: courseIds, user_id: uidNum },
+                    group: ['course_id'],
+                    raw: true,
+                }),
+            ]);
+            const totals = new Map(lessonTotals.map((r) => [Number(r.course_id), Number(r.total) || 0]));
+            const dones = new Map(completionTotals.map((r) => [Number(r.course_id), Number(r.done) || 0]));
+            for (const cid of courseIds) {
+                const total = totals.get(cid) || 0;
+                const done = Math.min(dones.get(cid) || 0, total);
+                const pct = total ? Math.round((done / total) * 100) : 0;
+                progressByCourse.set(cid, { total, done, pct });
+            }
+        } catch (e) {
+            console.warn('[public/courses] progress hydration failed:', e.message);
+        }
+    }
+
     return {
-        data: rows.map((r) => sanitizeCourse(r)),
-        total: count,
+        data: filteredRows.map((r) => {
+            const card = sanitizeCourse(r);
+            const p = progressByCourse.get(r.id);
+            if (p) {
+                card.lesson_count = p.total;
+                card.completed_lesson_count = p.done;
+                card.progress_pct = p.pct;
+            }
+            return card;
+        }),
+        // total is pre-narrowing — the frontend uses it only for "no results"
+        // detection (length 0). Using the post-filter length keeps the count
+        // honest with what the user actually sees and avoids ghost-pagination
+        // (a page that shows "13 results" with only 2 cards because batch
+        // narrowing dropped the rest).
+        total: filteredRows.length,
         per_page: limit,
         current_page: page,
-        last_page: Math.max(1, Math.ceil(count / limit)),
+        last_page: Math.max(1, Math.ceil(filteredRows.length / limit)),
         categories: [],
     };
 };

@@ -1,10 +1,14 @@
 const crypto = require('crypto');
 const path = require('path');
+const { QueryTypes } = require('sequelize');
 const repo = require('../repositories/CertificateRepository');
-const { Setting } = require('../models');
+const { Setting, Course } = require('../models');
 const { HttpError } = require('../middlewares/error');
 const fileUploader = require('../helpers/fileUploader');
 const env = require('../config/env');
+const authDb = require('../config/authDatabase');
+const { enqueue: enqueueEmailJob } = require('../jobs/emailQueue');
+const { certificateIssued } = require('../helpers/emailTemplates');
 
 /**
  * Certificate domain logic — ports the standalone certificate-module's
@@ -227,6 +231,64 @@ const listForUser = async ({ user_id }) => {
     return { certificates: rows.map((r) => (r.toJSON ? r.toJSON() : r)) };
 };
 
+// Fire-and-forget congrats email when a fresh certificate is issued. NOT
+// awaited from the issue() return path so SMTP latency / a downed queue
+// can't fail the certificate-issue request. Looks up name+email from the
+// auth DB (user_id is auth-service's string id) and the course title from
+// the admin DB. Best-effort — missing student email is silently dropped by
+// the queue helper.
+async function enqueueCertificateIssuedEmail({ certificate }) {
+    try {
+        if (!certificate) return;
+        const userId = String(certificate.user_id || '');
+        const courseId = Number(certificate.course_id);
+        if (!userId || !Number.isFinite(courseId)) return;
+
+        const [userRow] = await authDb.query(
+            'SELECT userId, name, email FROM users WHERE userId = :userId LIMIT 1',
+            { replacements: { userId }, type: QueryTypes.SELECT }
+        );
+        if (!userRow || !userRow.email) return;
+
+        const course = await Course.findByPk(courseId, {
+            attributes: ['id', 'title'],
+            raw: true,
+        }).catch(() => null);
+
+        const issuedDate = (() => {
+            const d = certificate.issued_at || certificate.created_at;
+            if (!d) return '';
+            const dt = new Date(d);
+            if (Number.isNaN(dt.getTime())) return '';
+            return dt.toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+            });
+        })();
+
+        const verifyUrl = certificate.identifier
+            ? `${env.appUrl}/api/public/certificate/${certificate.identifier}`
+            : '';
+
+        const { subject, html } = certificateIssued({
+            studentName: userRow.name,
+            courseTitle: course?.title,
+            issuedDate,
+            verifyUrl,
+            loginUrl: env.mail.lmsLoginUrl,
+        });
+        await enqueueEmailJob({
+            to: userRow.email,
+            subject,
+            html,
+            userId,
+        });
+    } catch (err) {
+        console.warn('[certificate-email] enqueue failed:', err.message);
+    }
+}
+
 const issue = async ({ user_id, course_id, progress }) => {
     if (!user_id || !course_id) {
         throw new HttpError(422, 'user_id and course_id are required');
@@ -246,6 +308,12 @@ const issue = async ({ user_id, course_id, progress }) => {
         identifier: generateIdentifier(12),
         issued_at: new Date(),
     });
+
+    // Only fire on first-time issue (existing branch above bails before
+    // this point) — re-rendering an already-earned certificate must not
+    // spam the student a second time.
+    enqueueCertificateIssuedEmail({ certificate: row });
+
     return { certificate: row, created: true };
 };
 

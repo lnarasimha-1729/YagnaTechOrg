@@ -1,3 +1,4 @@
+import './src/loadEnv.js';
 import app, { initDb } from './src/app.js';
 
 const PORT = process.env.PORT || 8002;

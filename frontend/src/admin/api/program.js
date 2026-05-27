@@ -11,3 +11,9 @@ export const storeProgram = (data) => api.post('/program/store', data).then((r) 
 export const updateProgram = (id, data) => api.post(`/program/update/${id}`, data).then((r) => r.data);
 
 export const deleteProgram = (id) => api.delete(`/program/delete/${id}`).then((r) => r.data);
+
+// Programs linked to a (college, batch) — powers Manage Students dropdowns.
+// Accepts either ids (clgId/batchId) or display names (clgName/batchName);
+// the backend resolves names against the colleges/batches tables.
+export const listProgramsForCollegeBatch = (params) =>
+    api.get('/programs/for-college-batch', { params }).then((r) => r.data);

@@ -1,4 +1,7 @@
+const { QueryTypes } = require('sequelize');
 const programRepo = require('../repositories/ProgramRepository');
+const { Program, Batch, BatchMember } = require('../models');
+const authDb = require('../config/authDatabase');
 const { HttpError } = require('../middlewares/error');
 
 // Features arrive from the form as either an array (when the admin's submit
@@ -36,6 +39,18 @@ const normalizeCourseId = (raw) => {
 // single string, or already-coerced array). Dedupe + cast to positive ints —
 // returns an array of NUMBERS (not strings) since course PKs are numeric.
 const normalizeCourseIds = (raw) => {
+    if (raw == null) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    const ids = arr
+        .map((v) => Number(String(v).trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+    return Array.from(new Set(ids));
+};
+
+// batchIds use the same numeric PK shape as courseIds. Form sends `batchIds`
+// from the Batch picker (cascades off selected colleges). Reuses the
+// course-ids normalisation pattern to keep behaviour consistent.
+const normalizeBatchIds = (raw) => {
     if (raw == null) return [];
     const arr = Array.isArray(raw) ? raw : [raw];
     const ids = arr
@@ -83,6 +98,7 @@ const create = async (body = {}) => {
         // still resolve a name. Falls back to body.course_id if no array was
         // sent — supports legacy clients that haven't switched yet.
         course_id: courseIds[0] ?? normalizeCourseId(body.course_id),
+        batch_ids: normalizeBatchIds(body.batchIds ?? body['batchIds[]']),
     };
     const program = await programRepo.create(data);
     return { success: 'Program added successfully', program };
@@ -125,6 +141,11 @@ const update = async (id, body = {}) => {
         data.course_id = one;
         data.course_ids = one ? [one] : [];
     }
+    // Only overwrite batch_ids when the form actually sent the field — same
+    // guard the other arrays use so a partial save doesn't wipe the mapping.
+    if (body.batchIds !== undefined || body['batchIds[]'] !== undefined) {
+        data.batch_ids = normalizeBatchIds(body.batchIds ?? body['batchIds[]']);
+    }
 
     await program.update(data);
     return { success: 'Program updated successfully', program };
@@ -137,4 +158,103 @@ const remove = async (id) => {
     return { success: 'Program deleted successfully' };
 };
 
-module.exports = { list, get, create, update, remove };
+// Returns the admin-created programs a student is eligible for at pre-
+// assessment time: clg_ids includes the student's collegeId AND batch_ids
+// overlaps a batch the student is a member of. The course_ids dimension is
+// intentionally NOT applied here — the student hasn't enrolled in any course
+// at this point in the flow (enrollment happens after they pick a program),
+// so requiring enrolled-course overlap would always return an empty list.
+//
+// Only is_active programs surface. Empty userId / unknown user / missing
+// collegeId / no batch membership all return an empty list so the modal
+// renders the empty hint.
+const listEligible = async (userId) => {
+    if (!userId) return { programs: [] };
+
+    // Read the student row from the shared auth DB (admin-service has no
+    // duplicate User model). collation/case is preserved as stored.
+    const [userRow] = await authDb.query(
+        'SELECT collegeId FROM users WHERE userId = :userId LIMIT 1',
+        { replacements: { userId: String(userId) }, type: QueryTypes.SELECT }
+    );
+    const collegeId = userRow?.collegeId || null;
+    if (!collegeId) return { programs: [] };
+
+    // Batches the student belongs to. BatchMember.user_id is STRING so the
+    // 11-digit auth userIds don't overflow INT.
+    const memberRows = await BatchMember.findAll({
+        where: { user_id: String(userId) },
+        attributes: ['batch_id'],
+        raw: true,
+    }).catch(() => []);
+    const memberBatchIds = new Set(memberRows.map((r) => Number(r.batch_id)).filter(Boolean));
+
+    // Pull every active program, then filter in JS — the JSON-column overlap
+    // would need DB-specific JSON_OVERLAPS / JSON_CONTAINS_PATH calls and the
+    // program count stays small enough that an in-memory filter is fine.
+    const all = await Program.findAll({ where: { is_active: true }, order: [['sort', 'ASC'], ['id', 'ASC']] });
+    const matches = all
+        .map((p) => p.toJSON())
+        .filter((p) => {
+            const clgIds = Array.isArray(p.clg_ids) ? p.clg_ids.map(String) : [];
+            if (!clgIds.includes(String(collegeId))) return false;
+
+            const programBatchIds = Array.isArray(p.batch_ids) ? p.batch_ids.map(Number) : [];
+            if (programBatchIds.length === 0) return false;
+            if (!programBatchIds.some((id) => memberBatchIds.has(id))) return false;
+
+            return true;
+        });
+
+    return { programs: matches };
+};
+
+// Programs linked by root admin to a specific (college, batch). Powers the
+// Bulk Request modal + per-row Program dropdown on Manage Students. Names
+// are resolved to ids server-side so the frontend can hand over what it
+// already displays without a second round-trip. Empty inputs → empty list.
+const listForCollegeBatch = async ({ clgId = '', clgName = '', batchId = '', batchName = '' } = {}) => {
+    // Resolve clgId from name when only the name was supplied (Manage Students
+    // dropdown stores the display name in the URL).
+    let resolvedClgId = String(clgId || '').trim();
+    if (!resolvedClgId && clgName) {
+        const rows = await authDb.query(
+            'SELECT clgId FROM colleges WHERE clgName = :name LIMIT 1',
+            { replacements: { name: String(clgName).trim() }, type: QueryTypes.SELECT }
+        ).catch(() => []);
+        resolvedClgId = rows[0]?.clgId || '';
+    }
+
+    // Same for batch: resolve by name within the resolved college so two
+    // colleges with same-named batches don't collide.
+    let resolvedBatchId = Number(batchId) || null;
+    if (!resolvedBatchId && batchName && resolvedClgId) {
+        const batch = await Batch.findOne({
+            where: { name: String(batchName).trim(), clg_id: resolvedClgId },
+            attributes: ['id'],
+            raw: true,
+        }).catch(() => null);
+        resolvedBatchId = batch?.id || null;
+    }
+
+    if (!resolvedClgId || !resolvedBatchId) return { programs: [] };
+
+    // Filter in JS — JSON-column overlap differs across MySQL versions and
+    // the program count is small. Same approach as listEligible.
+    const all = await Program.findAll({
+        where: { is_active: true },
+        order: [['sort', 'ASC'], ['id', 'ASC']],
+    });
+    const matches = all
+        .map((p) => p.toJSON())
+        .filter((p) => {
+            const clgIds = Array.isArray(p.clg_ids) ? p.clg_ids.map(String) : [];
+            if (!clgIds.includes(String(resolvedClgId))) return false;
+            const batchIds = Array.isArray(p.batch_ids) ? p.batch_ids.map(Number) : [];
+            return batchIds.includes(Number(resolvedBatchId));
+        });
+
+    return { programs: matches };
+};
+
+module.exports = { list, get, create, update, remove, listEligible, listForCollegeBatch };

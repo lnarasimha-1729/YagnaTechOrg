@@ -45,5 +45,14 @@ module.exports = {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
         from: process.env.SMTP_FROM,
+        // Public-facing LMS login URL embedded in transactional emails. Falls
+        // back to the SPA dev port; override in .env for staging / prod.
+        lmsLoginUrl: process.env.LMS_LOGIN_URL || 'http://localhost:5173/login',
     },
+    // Shared secret used by sibling services (assessment-service today, more
+    // later) to call admin-service's internal endpoints — currently just
+    // /api/internal/email/enqueue. Must match INTERNAL_API_SECRET in each
+    // caller's .env. Empty value disables the endpoint entirely (default in
+    // dev to avoid an unauthenticated open relay).
+    internalSecret: process.env.INTERNAL_API_SECRET || '',
 };

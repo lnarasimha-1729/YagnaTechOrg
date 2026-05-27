@@ -15,6 +15,7 @@ import {
 import ProgramCard from "@/components/programs/ProgramCard";
 import { getProfile } from "@/api/authApi";
 import { getCourseDetails } from "@/api/course/courseApi";
+import { getAcceptedProgram } from "@/api/programRequestApi";
 
 // Map the admin-stored icon name (e.g. "Globe2") to the actual lucide-react
 // component. Mirrors the curated set the admin ProgramForm picker exposes.
@@ -73,6 +74,12 @@ const ProgramsForCourse = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [hasCollege, setHasCollege] = useState<boolean | null>(null);
+    // The program the student has accepted (program_requests.status =
+    // 'accepted'). A card's Enroll button is enabled ONLY when its title
+    // matches this value. Refreshed on a custom 'program-request-accepted'
+    // event + tab visibility, so accepting in another part of the dashboard
+    // unlocks the card without a hard reload.
+    const [acceptedProgram, setAcceptedProgram] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -128,6 +135,35 @@ const ProgramsForCourse = () => {
         return () => { cancelled = true; };
     }, [slug]);
 
+    // Pull the accepted program. Same listener pattern My Courses uses so
+    // accepting on the dashboard banner unlocks the matching card here
+    // without a hard refresh.
+    useEffect(() => {
+        let cancelled = false;
+        const refetch = () => {
+            getAcceptedProgram()
+                .then((p) => { if (!cancelled) setAcceptedProgram(p); })
+                .catch(() => { /* keep existing value */ });
+        };
+        refetch();
+
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') refetch();
+        };
+        const onCustom = () => refetch();
+
+        document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('focus', onCustom);
+        window.addEventListener('program-request-accepted', onCustom);
+
+        return () => {
+            cancelled = true;
+            document.removeEventListener('visibilitychange', onVisible);
+            window.removeEventListener('focus', onCustom);
+            window.removeEventListener('program-request-accepted', onCustom);
+        };
+    }, []);
+
     // Once we have both the resolved course AND the student's clgId, fetch
     // the programs that match this (course, college) pair. Backend filter does
     // the heavy lifting — see /api/public/programs in server.js.
@@ -142,8 +178,15 @@ const ProgramsForCourse = () => {
                     clgId = ((res.data as any)?.collegeId as string) || "";
                 } catch { /* handled by hasCollege flag */ }
 
+                // user_id lets the backend narrow by the student's batch in
+                // addition to college + course. Read from localStorage same
+                // way the other student-facing /api/public callers do.
+                const userId = localStorage.getItem("userId") || undefined;
                 const { data } = await axios.get(`${ADMIN_BASE}/api/public/programs`, {
-                    params: { clgId, course_id: course.id },
+                    params: userId
+                        ? { clgId, course_id: course.id, user_id: userId }
+                        : { clgId, course_id: course.id },
+                    headers: userId ? { "x-user-id": String(userId) } : undefined,
                     timeout: 30000,
                 });
                 if (cancelled) return;
@@ -169,11 +212,19 @@ const ProgramsForCourse = () => {
         [programs],
     );
 
-    // "View More" jumps to the existing course-details page so the rest of
-    // the enrolment / player flow keeps working unchanged.
-    const handleView = () => {
+    // Enroll click → land on the course-details page with the accepted
+    // program id attached. CourseDetails's handleEnroll reads program_id
+    // from the URL and POSTs /user-progress/enroll-course, which flips the
+    // user_progress.enrolled flag (= the student's enrollment count). The
+    // student then sees "Go to Course" on the details page and lands in
+    // the player on click. Falls back to navigation without program_id
+    // when the accepted program can't be resolved (e.g. an unaccepted card
+    // shouldn't be clickable but the handler stays defensive).
+    const handleView = (programId?: number) => {
         if (!course?.slug) return;
-        navigate(`/courses/programs/course-details?slug=${encodeURIComponent(course.slug)}`);
+        const params = new URLSearchParams({ slug: course.slug });
+        if (programId) params.set('program_id', String(programId));
+        navigate(`/courses/programs/course-details?${params.toString()}`);
     };
 
     return (
@@ -209,16 +260,27 @@ const ProgramsForCourse = () => {
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {!loading && cards.map((p) => (
-                        <ProgramCard
-                            key={p.id}
-                            program={p}
-                            ctaLabel="Enroll"
-                            disabled
-                            disabledLabel="Enroll"
-                            onView={handleView}
-                        />
-                    ))}
+                    {!loading && cards.map((p) => {
+                        // Enroll only on the card whose title matches what
+                        // the student accepted (program_requests.status =
+                        // 'accepted'). Every other card stays locked until
+                        // the admin sends + the student accepts that program.
+                        const unlocked = !!acceptedProgram && p.title === acceptedProgram;
+                        return (
+                            <ProgramCard
+                                key={p.id}
+                                program={p}
+                                ctaLabel="Enroll"
+                                disabled={!unlocked}
+                                disabledLabel={
+                                    acceptedProgram
+                                        ? 'Locked'
+                                        : 'Waiting for admin approval'
+                                }
+                                onView={(program) => handleView(Number(program.id))}
+                            />
+                        );
+                    })}
                 </div>
             </div>
         </section>

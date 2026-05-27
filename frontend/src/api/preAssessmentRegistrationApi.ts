@@ -1,15 +1,23 @@
+import axios from "axios";
 import axiosInstance from "./axiosInstance";
+import { API_BASE } from "@/admin/api/client";
 
-// Mirrors the enum in `backend/assessment-service/src/utils/preAssessmentConstants.js`.
-// Kept here so the modal can iterate type-safely without re-importing strings
-// from a JS bundle.
-export const PRE_ASSESSMENT_PROGRAMS = [
-  "AI Frontier",
-  "AI Frontier Plus",
-  "Elite AI Residency",
-] as const;
+// Programs are now admin-created. The student picks from the eligible list
+// returned by /api/public/programs/eligible (matched by college + batch +
+// enrolled-course). The legacy hardcoded titles are gone — selectedProgram
+// is whatever title the admin gave the program.
+export type PreAssessmentProgram = string;
 
-export type PreAssessmentProgram = (typeof PRE_ASSESSMENT_PROGRAMS)[number];
+// Shape returned by /api/public/programs/eligible. Mirrors the admin
+// programs.* columns the modal needs to render cards (title, tagline, the
+// bullet list under it).
+export interface EligibleProgram {
+  id: number;
+  title: string;
+  tagline?: string | null;
+  icon?: string | null;
+  features?: string[];
+}
 
 export type PreAssessmentGender = "Male" | "Female" | "Other";
 
@@ -43,6 +51,7 @@ export interface SubmitPreAssessmentRegistrationInput {
   email: string;
   phoneNumber: string;
   gender: PreAssessmentGender;
+  selectedProgramId: number;
   selectedProgram: PreAssessmentProgram;
   declarationAccepted: boolean;
   collegeProof: File;
@@ -61,6 +70,7 @@ export const submitPreAssessmentRegistration = (
   fd.append("phoneNumber", input.phoneNumber);
   fd.append("gender", input.gender);
   fd.append("selectedProgram", input.selectedProgram);
+  fd.append("selectedProgramId", String(input.selectedProgramId));
   fd.append("declarationAccepted", input.declarationAccepted ? "true" : "false");
   fd.append("collegeProof", input.collegeProof);
 
@@ -78,3 +88,19 @@ export const markPreAssessmentRegistrationStarted = (registrationId: string) =>
   axiosInstance.post<{ data: PreAssessmentRegistration }>(
     `${RESOURCE}/${registrationId}/started`
   );
+
+// Programs the current student is eligible to register for. Filtered server
+// side by college + batch + enrolled-course (admin-service /api/public route).
+// The user id is read from localStorage the same way other student-facing
+// /api/public callers do.
+export const getEligiblePrograms = () => {
+  const userId = localStorage.getItem("userId");
+  return axios.get<{ programs: EligibleProgram[] }>(
+    `${API_BASE}/api/public/programs/eligible`,
+    {
+      params: userId ? { user_id: userId } : undefined,
+      headers: userId ? { "x-user-id": String(userId) } : undefined,
+      timeout: 15000,
+    }
+  );
+};

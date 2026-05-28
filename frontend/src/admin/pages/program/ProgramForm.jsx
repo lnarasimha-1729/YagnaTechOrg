@@ -36,15 +36,33 @@ export default function ProgramForm({ initial = {}, onSubmit, submitting = false
     const [selectedClgIds, setSelectedClgIds] = useState(
         Array.isArray(initial.clg_ids) ? initial.clg_ids.map(String) : [],
     );
-    // Courses bundled into the program. Hydrate from course_ids (new column);
-    // for legacy rows that still carry only course_id, fall back to a single-
-    // element seed so editing a pre-multi row doesn't lose the selection.
-    const [selectedCourseIds, setSelectedCourseIds] = useState(() => {
-        if (Array.isArray(initial.course_ids) && initial.course_ids.length) {
-            return initial.course_ids.map(String);
+    // Courses bundled into the program, scoped PER COLLEGE. Each pick is a
+    // { courseId, clgId } pair so a course can be included for one college but
+    // not another. Hydrate from course_clg_pairs (new column). For legacy rows
+    // that only carry course_ids + clg_ids, seed the cross-product so editing a
+    // pre-pairs row keeps every course visible under each of its colleges.
+    const [coursePairs, setCoursePairs] = useState(() => {
+        const raw = Array.isArray(initial.course_clg_pairs) ? initial.course_clg_pairs : [];
+        if (raw.length) {
+            return raw
+                .map((p) => ({
+                    courseId: String(p.courseId ?? p.course_id ?? ''),
+                    clgId: String(p.clgId ?? p.clg_id ?? ''),
+                }))
+                .filter((p) => p.courseId);
         }
-        if (initial.course_id) return [String(initial.course_id)];
-        return [];
+        // Legacy fallback: expand course_ids × clg_ids so old programs still
+        // render their selections. The dropdown prunes pairs whose course
+        // doesn't actually belong to a college once courses load.
+        const legacyCourses = Array.isArray(initial.course_ids) && initial.course_ids.length
+            ? initial.course_ids.map(String)
+            : (initial.course_id ? [String(initial.course_id)] : []);
+        const legacyClgs = Array.isArray(initial.clg_ids) ? initial.clg_ids.map(String) : [];
+        if (!legacyCourses.length) return [];
+        if (!legacyClgs.length) return legacyCourses.map((courseId) => ({ courseId, clgId: '' }));
+        return legacyCourses.flatMap((courseId) =>
+            legacyClgs.map((clgId) => ({ courseId, clgId })),
+        );
     });
     // Batches scoped to selectedClgIds. BatchMultiSelect re-fetches when the
     // college set changes and prunes selections whose college is no longer
@@ -77,6 +95,13 @@ export default function ProgramForm({ initial = {}, onSubmit, submitting = false
     // flow is college → course → batch, so batches must come from the courses
     // themselves. Returns an empty Set when no course has batch_ids, which
     // BatchMultiSelect renders as "no batches available".
+    // Distinct course ids across the per-college pairs — batch narrowing is
+    // course-driven, not college-driven, so we union over the unique courses.
+    const selectedCourseIds = useMemo(
+        () => Array.from(new Set(coursePairs.map((p) => String(p.courseId)))),
+        [coursePairs],
+    );
+
     const allowedBatchIds = useMemo(() => {
         const union = new Set();
         for (const id of selectedCourseIds) {
@@ -110,7 +135,11 @@ export default function ProgramForm({ initial = {}, onSubmit, submitting = false
             is_active: form.is_active ? 1 : 0,
             features: cleanedFeatures,
             clgIds: selectedClgIds,
-            courseIds: selectedCourseIds,
+            // Per-college course selection. Backend derives course_ids (the
+            // distinct union) from these for back-compat.
+            coursePairs: coursePairs
+                .filter((p) => p.courseId && p.clgId)
+                .map((p) => ({ courseId: Number(p.courseId), clgId: p.clgId })),
             batchIds: selectedBatchIds,
         });
     };
@@ -151,8 +180,9 @@ export default function ProgramForm({ initial = {}, onSubmit, submitting = false
 
             <div className="mb-3">
                 <CourseMultiSelect
-                    value={selectedCourseIds}
-                    onChange={setSelectedCourseIds}
+                    pairs
+                    value={coursePairs}
+                    onChange={setCoursePairs}
                     clgIds={selectedClgIds}
                     required
                 />

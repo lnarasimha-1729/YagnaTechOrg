@@ -54,6 +54,15 @@ const Assessment = sequelize.define("Assessment", {
     type: DataTypes.JSON,
     allowNull: false,
     defaultValue: []
+  },
+  // When true, getAssessmentById serves the questions array in a per-student
+  // randomised order (seeded by userId + assessmentId so the order is stable
+  // across page refreshes for the same student). Default off keeps existing
+  // assessments deterministic.
+  shuffleQuestions: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
   }
 }, {
   tableName: "assessments",

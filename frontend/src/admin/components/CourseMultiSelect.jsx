@@ -2,23 +2,37 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { listCourses } from '../api/course';
 import { useCollege } from '@/hooks/useCollege';
 
-// Multi-select course picker styled like CollegeMultiSelect:
+// Multi-select course picker styled like CollegeMultiSelect / BatchMultiSelect:
 // a clickable trigger that shows chosen courses as chips (with × to remove),
-// plus a popover with a search input and a scrollable checkbox list. Each
-// row renders the course title followed by "— <college name>" so the admin
-// always sees which college each course belongs to.
+// plus a popover with a search input and a scrollable checkbox list.
+//
+// When one or more colleges are selected (`clgIds`), the list is GROUPED by
+// college — a course that belongs to several selected colleges is shown under
+// each college's header.
+//
+// Two selection contracts, chosen by the `pairs` prop:
+//   pairs=false (default) — legacy flat contract. `value` is an array of course
+//     id strings; ticking a course selects it across every college it shows
+//     under. Used by AssessmentForm.
+//   pairs=true — per-college contract. `value`/`onChange` use { courseId, clgId }
+//     pairs so ticking a course under College A does NOT tick it under College
+//     B even when both offer it. Used by ProgramForm.
 //
 // Props:
-//   value     — array of selected course ids (strings; numeric ids OK too)
-//   onChange  — receives the next array (always strings)
+//   value     — array of course id strings (pairs=false) OR { courseId, clgId }
+//               pairs (pairs=true)
+//   onChange  — receives the next value in the same shape as `value`
+//   pairs     — opt into the per-college pair contract (default false)
 //   required  — show the red asterisk on the label (validation is caller's)
 //   label     — defaults to 'Courses'
 //   hideLabel — render without the internal label
 //   clgIds    — optional array of clgId strings; when non-empty, only courses
-//               whose clg_ids include at least one of these ids are listed
+//               whose clg_ids include at least one of these ids are listed,
+//               grouped under each matching college's header
 export default function CourseMultiSelect({
     value = [],
     onChange,
+    pairs: pairMode = false,
     required = false,
     label = 'Courses',
     hideLabel = false,
@@ -38,20 +52,6 @@ export default function CourseMultiSelect({
         (colleges || []).forEach((c) => { map[c.clgId] = c.clgName; });
         return map;
     }, [colleges]);
-
-    // Best college label for a course given the current scope: prefer the
-    // first selected college the course belongs to, else its first clg_id.
-    const collegeLabelFor = (course) => {
-        const ids = Array.isArray(course?.clg_ids) ? course.clg_ids.map(String) : [];
-        if (ids.length === 0) return '';
-        let pickedId = ids[0];
-        if (Array.isArray(clgIds) && clgIds.length > 0) {
-            const selected = new Set(clgIds.map(String));
-            const match = ids.find((id) => selected.has(id));
-            if (match) pickedId = match;
-        }
-        return collegeNameById[pickedId] || pickedId;
-    };
 
     useEffect(() => {
         let alive = true;
@@ -82,6 +82,41 @@ export default function CourseMultiSelect({
         return () => document.removeEventListener('mousedown', onDocClick);
     }, [open]);
 
+    const pairKey = (courseId, clgId) => `${String(courseId)}:${String(clgId ?? '')}`;
+
+    // Internal model is always pairs. In legacy (flat) mode the incoming value
+    // is course id strings with no college dimension — those are tracked as a
+    // set of selected course ids, and a checkbox is "checked" whenever its
+    // course id is selected, regardless of which college group it's rendered in.
+    const legacyIds = useMemo(
+        () => (pairMode ? null : new Set((Array.isArray(value) ? value : []).map(String))),
+        [value, pairMode],
+    );
+
+    // Pair-mode value normalised to { courseId:String, clgId:String }.
+    const pairs = useMemo(
+        () => (pairMode && Array.isArray(value)
+            ? value.map((p) => ({ courseId: String(p.courseId), clgId: String(p.clgId ?? '') }))
+            : []),
+        [value, pairMode],
+    );
+
+    const selectedKeys = useMemo(
+        () => (pairMode ? new Set(pairs.map((p) => pairKey(p.courseId, p.clgId))) : new Set()),
+        [pairs, pairMode],
+    );
+
+    // Is a given course+college cell checked? Pair mode keys by both; legacy
+    // mode keys only by course id (selection is shared across colleges).
+    const isChecked = (courseId, clgId) =>
+        pairMode ? selectedKeys.has(pairKey(courseId, clgId)) : legacyIds.has(String(courseId));
+
+    const courseById = useMemo(() => {
+        const map = {};
+        courses.forEach((c) => { map[String(c.id)] = c; });
+        return map;
+    }, [courses]);
+
     // Scope by selected colleges if provided; else show everything.
     const scoped = useMemo(() => {
         if (!Array.isArray(clgIds) || clgIds.length === 0) return courses;
@@ -92,47 +127,134 @@ export default function CourseMultiSelect({
         });
     }, [courses, clgIds]);
 
-    const filtered = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        if (!q) return scoped;
-        return scoped.filter((c) => {
-            if (String(c.title || '').toLowerCase().includes(q)) return true;
-            const collegeLabel = collegeLabelFor(c);
-            return collegeLabel.toLowerCase().includes(q);
-        });
-    }, [scoped, search, collegeNameById, clgIds]);
-
-    const valueStrs = useMemo(() => value.map(String), [value]);
-    const courseById = useMemo(() => {
-        const map = {};
-        courses.forEach((c) => { map[String(c.id)] = c; });
-        return map;
-    }, [courses]);
-
-    // Drop ids that no longer match the current scope (e.g. admin removed
-    // the colleges that backed them). Runs after `scoped` updates.
+    // Drop selections that no longer match the current scope. Pair mode prunes
+    // by college + course membership; legacy mode prunes by course-in-scope
+    // (matching the original flat behavior).
     useEffect(() => {
-        if (valueStrs.length === 0) return;
-        const inScope = new Set(scoped.map((c) => String(c.id)));
-        const next = valueStrs.filter((id) => inScope.has(id));
-        if (next.length !== valueStrs.length) onChange(next);
+        if (pairMode) {
+            if (pairs.length === 0) return;
+            const selected = new Set((Array.isArray(clgIds) ? clgIds : []).map(String));
+            const next = pairs.filter((p) => {
+                if (selected.size > 0 && !selected.has(p.clgId)) return false;
+                const course = courseById[p.courseId];
+                if (!course) return true; // courses still loading — keep until known
+                const ids = Array.isArray(course.clg_ids) ? course.clg_ids.map(String) : [];
+                if (!p.clgId) return selected.size === 0;
+                return ids.includes(p.clgId);
+            });
+            if (next.length !== pairs.length) onChange(next);
+        } else {
+            if (!legacyIds || legacyIds.size === 0) return;
+            const inScope = new Set(scoped.map((c) => String(c.id)));
+            const next = [...legacyIds].filter((id) => inScope.has(id));
+            if (next.length !== legacyIds.size) onChange(next);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [scoped]);
+    }, [clgIds, courseById, scoped]);
 
-    const toggle = (id) => {
-        const s = String(id);
-        onChange(valueStrs.includes(s) ? valueStrs.filter((x) => x !== s) : [...valueStrs, s]);
+    const matchesSearch = (course) => {
+        const q = search.trim().toLowerCase();
+        if (!q) return true;
+        return String(course.title || '').toLowerCase().includes(q);
     };
 
-    const remove = (id, e) => {
+    // Filtered + grouped by college. Each course is emitted under each selected
+    // college it belongs to. Group order follows the admin's college-pick order.
+    // Search matches the course title OR the college name.
+    const groupedFiltered = useMemo(() => {
+        const selected = (Array.isArray(clgIds) ? clgIds : []).map(String);
+        if (selected.length === 0) return [];
+        const q = search.trim().toLowerCase();
+        return selected
+            .map((clgId) => {
+                const clgName = collegeNameById[clgId] || clgId;
+                const collegeMatches = clgName.toLowerCase().includes(q);
+                const items = scoped.filter((c) => {
+                    const ids = Array.isArray(c.clg_ids) ? c.clg_ids.map(String) : [];
+                    if (!ids.includes(String(clgId))) return false;
+                    return !q || matchesSearch(c) || collegeMatches;
+                });
+                return { clgId, clgName, items };
+            })
+            .filter((g) => g.items.length > 0);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scoped, clgIds, collegeNameById, search]);
+
+    // Flat (ungrouped) list used when no college is selected. Picks here carry
+    // an empty clgId until the admin scopes by college.
+    const flatFiltered = useMemo(() => {
+        return scoped.filter(matchesSearch);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scoped, search]);
+
+    const toggle = (courseId, clgId) => {
+        if (!pairMode) {
+            const s = String(courseId);
+            const next = legacyIds.has(s)
+                ? [...legacyIds].filter((x) => x !== s)
+                : [...legacyIds, s];
+            onChange(next);
+            return;
+        }
+        const key = pairKey(courseId, clgId);
+        if (selectedKeys.has(key)) {
+            onChange(pairs.filter((p) => pairKey(p.courseId, p.clgId) !== key));
+        } else {
+            onChange([...pairs, { courseId: String(courseId), clgId: String(clgId ?? '') }]);
+        }
+    };
+
+    // Select/clear every course in one college group at once.
+    const toggleGroup = (clgId, items) => {
+        if (!pairMode) {
+            const groupIds = items.map((c) => String(c.id));
+            const allSelected = groupIds.every((id) => legacyIds.has(id));
+            if (allSelected) {
+                const drop = new Set(groupIds);
+                onChange([...legacyIds].filter((id) => !drop.has(id)));
+            } else {
+                onChange([...new Set([...legacyIds, ...groupIds])]);
+            }
+            return;
+        }
+        const groupKeys = items.map((c) => pairKey(c.id, clgId));
+        const allSelected = groupKeys.every((k) => selectedKeys.has(k));
+        if (allSelected) {
+            const drop = new Set(groupKeys);
+            onChange(pairs.filter((p) => !drop.has(pairKey(p.courseId, p.clgId))));
+        } else {
+            const additions = items
+                .filter((c) => !selectedKeys.has(pairKey(c.id, clgId)))
+                .map((c) => ({ courseId: String(c.id), clgId: String(clgId) }));
+            onChange([...pairs, ...additions]);
+        }
+    };
+
+    const removePair = (courseId, clgId, e) => {
         e.stopPropagation();
-        const s = String(id);
-        onChange(valueStrs.filter((x) => x !== s));
+        if (!pairMode) {
+            const s = String(courseId);
+            onChange([...legacyIds].filter((x) => x !== s));
+            return;
+        }
+        const key = pairKey(courseId, clgId);
+        onChange(pairs.filter((p) => pairKey(p.courseId, p.clgId) !== key));
     };
+
+    // Chips shown in the trigger. Pair mode shows one chip per course+college;
+    // legacy mode shows one chip per course (clgId blank).
+    const selectedChips = useMemo(
+        () => (pairMode
+            ? pairs
+            : [...(legacyIds || [])].map((id) => ({ courseId: id, clgId: '' }))),
+        [pairMode, pairs, legacyIds],
+    );
 
     const placeholder = clgIds.length > 0 && scoped.length === 0
         ? 'No courses available for the chosen college(s)'
         : 'Select courses…';
+
+    const hasColleges = Array.isArray(clgIds) && clgIds.length > 0;
 
     return (
         <div>
@@ -166,18 +288,21 @@ export default function CourseMultiSelect({
                         aria-haspopup="listbox"
                         aria-expanded={open}
                     >
-                        {valueStrs.length === 0 ? (
+                        {selectedChips.length === 0 ? (
                             <span className="text-[14px] text-gray">{placeholder}</span>
                         ) : (
-                            valueStrs.map((id) => {
-                                const c = courseById[id];
-                                const title = c ? c.title : `#${id}`;
-                                const collegeLabel = c ? collegeLabelFor(c) : '';
+                            selectedChips.map((p) => {
+                                const c = courseById[p.courseId];
+                                const title = c ? c.title : `#${p.courseId}`;
+                                const collegeLabel = p.clgId
+                                    ? (collegeNameById[p.clgId] || p.clgId)
+                                    : '';
                                 return (
                                     <span
-                                        key={id}
+                                        key={pairKey(p.courseId, p.clgId)}
                                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[13px]"
                                         onClick={(e) => e.stopPropagation()}
+                                        title={collegeLabel ? `${title} · ${collegeLabel}` : title}
                                     >
                                         <span className="truncate max-w-[260px]">
                                             {title}
@@ -187,7 +312,7 @@ export default function CourseMultiSelect({
                                         </span>
                                         <button
                                             type="button"
-                                            onClick={(e) => remove(id, e)}
+                                            onClick={(e) => removePair(p.courseId, p.clgId, e)}
                                             className="text-emerald-700 hover:text-rose-600 font-bold leading-none"
                                             aria-label={`Remove ${title}`}
                                         >
@@ -219,38 +344,82 @@ export default function CourseMultiSelect({
                                     autoFocus
                                 />
                             </div>
-                            <div className="max-h-56 overflow-y-auto divide-y">
-                                {filtered.length === 0 ? (
-                                    <div className="px-3 py-2 text-[13px] text-gray">No matches.</div>
-                                ) : (
-                                    filtered.map((c) => {
-                                        const id = String(c.id);
-                                        const checked = valueStrs.includes(id);
-                                        const collegeLabel = collegeLabelFor(c);
-                                        return (
-                                            <label
-                                                key={id}
-                                                className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50"
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={checked}
-                                                    onChange={() => toggle(id)}
-                                                    className="w-4 h-4 mt-0.5 accent-skin cursor-pointer"
-                                                />
-                                                <div className="flex items-baseline gap-1.5 min-w-0">
-                                                    <span className="text-[14px] font-medium text-dark truncate">
-                                                        {c.title}
-                                                    </span>
-                                                    {collegeLabel && (
-                                                        <span className="text-[13px] text-gray truncate">
-                                                            — {collegeLabel}
-                                                        </span>
-                                                    )}
+                            <div className="max-h-72 overflow-y-auto">
+                                {hasColleges ? (
+                                    groupedFiltered.length === 0 ? (
+                                        <div className="px-3 py-2 text-[13px] text-gray">No matches.</div>
+                                    ) : (
+                                        groupedFiltered.map((group) => {
+                                            const selectedInGroup = group.items
+                                                .filter((c) => isChecked(c.id, group.clgId)).length;
+                                            const allSelected = selectedInGroup === group.items.length && group.items.length > 0;
+                                            const someSelected = selectedInGroup > 0 && !allSelected;
+                                            return (
+                                                <div key={group.clgId} className="border-b last:border-b-0">
+                                                    <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 sticky top-0">
+                                                        <div className="text-[12px] font-semibold text-dark truncate" title={group.clgId}>
+                                                            {group.clgName}
+                                                            <span className="ml-2 text-[11px] font-normal text-gray">
+                                                                {selectedInGroup}/{group.items.length}
+                                                            </span>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            className="text-[12px] text-skin hover:underline whitespace-nowrap"
+                                                            onClick={() => toggleGroup(group.clgId, group.items)}
+                                                        >
+                                                            {allSelected ? 'Clear all' : someSelected ? 'Select rest' : 'Select all'}
+                                                        </button>
+                                                    </div>
+                                                    {group.items.map((c) => {
+                                                        const checked = isChecked(c.id, group.clgId);
+                                                        return (
+                                                            <label
+                                                                key={`${group.clgId}:${c.id}`}
+                                                                className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50"
+                                                            >
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={checked}
+                                                                    onChange={() => toggle(c.id, group.clgId)}
+                                                                    className="w-4 h-4 mt-0.5 accent-skin cursor-pointer"
+                                                                />
+                                                                <span className="text-[14px] font-medium text-dark truncate">
+                                                                    {c.title}
+                                                                </span>
+                                                            </label>
+                                                        );
+                                                    })}
                                                 </div>
-                                            </label>
-                                        );
-                                    })
+                                            );
+                                        })
+                                    )
+                                ) : (
+                                    flatFiltered.length === 0 ? (
+                                        <div className="px-3 py-2 text-[13px] text-gray">No matches.</div>
+                                    ) : (
+                                        <div className="divide-y">
+                                            {flatFiltered.map((c) => {
+                                                const checked = isChecked(c.id, '');
+                                                return (
+                                                    <label
+                                                        key={c.id}
+                                                        className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={checked}
+                                                            onChange={() => toggle(c.id, '')}
+                                                            className="w-4 h-4 mt-0.5 accent-skin cursor-pointer"
+                                                        />
+                                                        <span className="text-[14px] font-medium text-dark truncate">
+                                                            {c.title}
+                                                        </span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    )
                                 )}
                             </div>
                         </div>
@@ -258,7 +427,7 @@ export default function CourseMultiSelect({
                 </div>
             )}
 
-            {required && <input type="hidden" required value={valueStrs.length ? '1' : ''} readOnly />}
+            {required && <input type="hidden" required value={selectedChips.length ? '1' : ''} readOnly />}
         </div>
     );
 }

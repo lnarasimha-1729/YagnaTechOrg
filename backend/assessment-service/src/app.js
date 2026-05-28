@@ -556,6 +556,24 @@ export async function initDb() {
     console.warn('[pre_assessment_registrations] column migration skipped:', e.message);
   }
 
+  // assessments.shuffleQuestions — when true, questions are served in a
+  // per-student deterministic random order. sequelize.sync() doesn't ADD
+  // columns to existing tables, so add it on the fly the same way the
+  // registrations table migrates.
+  try {
+    const { QueryTypes } = await import('sequelize');
+    const cols = await sequelize.query('DESCRIBE assessments', { type: QueryTypes.SELECT });
+    const hasShuffle = cols.some((c) => c.Field === 'shuffleQuestions');
+    if (!hasShuffle) {
+      await sequelize.query(
+        'ALTER TABLE assessments ADD COLUMN shuffleQuestions TINYINT(1) NOT NULL DEFAULT 0'
+      );
+      console.log('🛠️  Added assessments.shuffleQuestions column');
+    }
+  } catch (e) {
+    console.warn('[assessments] shuffleQuestions migration skipped:', e.message);
+  }
+
   await seedPreAssessment();
   await seedPostAssessment();
   console.log('🗄️  Database connected and synced---');

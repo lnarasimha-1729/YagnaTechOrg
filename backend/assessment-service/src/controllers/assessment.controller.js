@@ -2,6 +2,45 @@ import Assessment from "../db/models/Assessment.js";
 import QuestionSet from "../db/models/QuestionSet.js";
 import Question from "../db/models/Question.js";
 
+// Cyrb53 — small, fast non-cryptographic hash. We use it to derive a 32-bit
+// seed from "userId|assessmentId" so each student gets their own deterministic
+// question order that's stable across page refreshes.
+function cyrb53(str, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+// Mulberry32 — seeded PRNG. Feeding cyrb53 output here produces a uniform
+// stream of doubles that's good enough for shuffling a question list.
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t = (t + 0x6d2b79f5) | 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Fisher–Yates with a seeded RNG. Returns a new array; does not mutate input.
+function shuffleWithSeed(arr, seedStr) {
+  const out = arr.slice();
+  const rand = mulberry32(cyrb53(String(seedStr)));
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 // Normalise an incoming list of ids to deduped string array. Accepts either
 // an array or a single value; trims; drops empties. Used for both clgIds and
 // courseIds so the JSON column always stores a clean shape.
@@ -17,6 +56,17 @@ function normaliseIdList(value) {
     out.push(s);
   }
   return out;
+}
+
+// Tolerate boolean, string, and number inputs from JSON / form payloads.
+function toBool(v, fallback = false) {
+  if (v === undefined || v === null || v === '') return fallback;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  const s = String(v).trim().toLowerCase();
+  if (['1', 'true', 'on', 'yes'].includes(s)) return true;
+  if (['0', 'false', 'off', 'no'].includes(s)) return false;
+  return fallback;
 }
 
 // ------------------ CREATE ------------------
@@ -47,7 +97,8 @@ export async function addAssessment(req, res) {
       timer,
       status,
       clgIds,
-      courseIds
+      courseIds,
+      shuffleQuestions: toBool(req.body.shuffleQuestions, false)
     });
 
     res.status(201).json(assessment);
@@ -106,6 +157,18 @@ export async function getAssessmentById(req, res) {
       questions = orderedIds.map((qid) => byId[qid]).filter(Boolean);
     }
 
+    // Per-student shuffle: when the admin enabled shuffleQuestions, each
+    // student receives questions in a unique deterministic order (seeded by
+    // userId + assessmentId so refreshes stay consistent). Admins keep the
+    // canonical order so the preview matches the QuestionSet config.
+    const isAdmin = req.user?.role === 'admin';
+    if (assessment.shuffleQuestions && !isAdmin && questions.length > 1) {
+      const userId = req.user?.userId || req.user?.id || '';
+      if (userId) {
+        questions = shuffleWithSeed(questions, `${userId}|${assessment.assessmentId}`);
+      }
+    }
+
     res.json({
       ...assessment.toJSON(),
       questionSet,
@@ -140,6 +203,9 @@ export async function updateAssessment(req, res) {
     }
     if (Object.prototype.hasOwnProperty.call(updates, 'courseIds')) {
       updates.courseIds = normaliseIdList(updates.courseIds);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'shuffleQuestions')) {
+      updates.shuffleQuestions = toBool(updates.shuffleQuestions, assessment.shuffleQuestions);
     }
 
     await assessment.update(updates);

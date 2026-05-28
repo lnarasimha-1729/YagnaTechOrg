@@ -698,6 +698,17 @@ sequelize.authenticate()
                 await sequelize.query("ALTER TABLE programs ADD COLUMN batch_ids JSON NULL");
                 console.log('🛠️  Added programs.batch_ids column');
             }
+            // course_clg_pairs: JSON array of { courseId, clgId } so a course
+            // can be picked for one college but not another. course_ids stays
+            // populated with the distinct union for back-compat.
+            const [coursePairsCol] = await sequelize.query(
+                "SHOW COLUMNS FROM programs WHERE Field = 'course_clg_pairs'",
+                { type: QueryTypes.SELECT }
+            );
+            if (!coursePairsCol) {
+                await sequelize.query("ALTER TABLE programs ADD COLUMN course_clg_pairs JSON NULL");
+                console.log('🛠️  Added programs.course_clg_pairs column');
+            }
         } catch (e) {
             console.warn('[programs] column check failed:', e.message);
         }

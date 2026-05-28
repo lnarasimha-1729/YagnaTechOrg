@@ -47,6 +47,37 @@ const normalizeCourseIds = (raw) => {
     return Array.from(new Set(ids));
 };
 
+// course_clg_pairs arrive from the form as an array of { courseId, clgId }
+// (the per-college course picker emits one pair per checked course+college).
+// Tolerate JSON-string payloads and dedupe identical pairs. courseId is a
+// positive int; clgId is a trimmed non-empty string. Invalid entries drop.
+const normalizeCoursePairs = (raw) => {
+    if (raw == null) return [];
+    let arr = raw;
+    if (typeof arr === 'string') {
+        try { arr = JSON.parse(arr); } catch { return []; }
+    }
+    if (!Array.isArray(arr)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const p of arr) {
+        if (!p || typeof p !== 'object') continue;
+        const courseId = Number(String(p.courseId ?? p.course_id ?? '').trim());
+        const clgId = String(p.clgId ?? p.clg_id ?? '').trim();
+        if (!Number.isInteger(courseId) || courseId <= 0 || !clgId) continue;
+        const key = `${courseId}:${clgId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ courseId, clgId });
+    }
+    return out;
+};
+
+// Distinct union of courseId across pairs — keeps course_ids populated so the
+// public catalog filter and other legacy readers keep working unchanged.
+const courseIdsFromPairs = (pairs) =>
+    Array.from(new Set(pairs.map((p) => p.courseId)));
+
 // batchIds use the same numeric PK shape as courseIds. Form sends `batchIds`
 // from the Batch picker (cascades off selected colleges). Reuses the
 // course-ids normalisation pattern to keep behaviour consistent.
@@ -83,7 +114,13 @@ const create = async (body = {}) => {
     if (!body.title || !String(body.title).trim()) {
         throw new HttpError(422, 'Title is required');
     }
-    const courseIds = normalizeCourseIds(body.courseIds ?? body['courseIds[]']);
+    // Prefer the per-college pairs (new form). Derive course_ids from them so
+    // legacy readers keep working. Fall back to the flat courseIds list when no
+    // pairs were sent (older clients).
+    const coursePairs = normalizeCoursePairs(body.coursePairs ?? body.course_clg_pairs);
+    const courseIds = coursePairs.length
+        ? courseIdsFromPairs(coursePairs)
+        : normalizeCourseIds(body.courseIds ?? body['courseIds[]']);
     const data = {
         title: String(body.title).trim(),
         tagline: body.tagline ? String(body.tagline).trim() : '',
@@ -93,6 +130,7 @@ const create = async (body = {}) => {
         is_active: toBool(body.is_active, true),
         clg_ids: normalizeClgIds(body.clgIds ?? body['clgIds[]']),
         course_ids: courseIds,
+        course_clg_pairs: coursePairs,
         // Keep the legacy single-course column in sync with the first selected
         // id so older callers (and the Manage Programs table's fallback render)
         // still resolve a name. Falls back to body.course_id if no array was
@@ -128,12 +166,23 @@ const update = async (id, body = {}) => {
     if (body.clgIds !== undefined || body['clgIds[]'] !== undefined) {
         data.clg_ids = normalizeClgIds(body.clgIds ?? body['clgIds[]']);
     }
-    if (body.courseIds !== undefined || body['courseIds[]'] !== undefined) {
+    if (body.coursePairs !== undefined || body.course_clg_pairs !== undefined) {
+        // New per-college payload is authoritative: store the pairs and derive
+        // course_ids / course_id from their distinct course set.
+        const pairs = normalizeCoursePairs(body.coursePairs ?? body.course_clg_pairs);
+        const ids = courseIdsFromPairs(pairs);
+        data.course_clg_pairs = pairs;
+        data.course_ids = ids;
+        data.course_id = ids[0] ?? null;
+    } else if (body.courseIds !== undefined || body['courseIds[]'] !== undefined) {
         const ids = normalizeCourseIds(body.courseIds ?? body['courseIds[]']);
         data.course_ids = ids;
         // Mirror onto the legacy single-id column so listings that still read
         // course_id keep working without a second round-trip.
         data.course_id = ids[0] ?? null;
+        // The flat list can't express per-college selection, so clear pairs to
+        // avoid a stale mapping that disagrees with course_ids.
+        data.course_clg_pairs = [];
     } else if (body.course_id !== undefined) {
         // Legacy single-id payload (older clients) — write both columns so
         // course_ids stays consistent.

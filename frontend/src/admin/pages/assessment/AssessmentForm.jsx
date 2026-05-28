@@ -21,6 +21,9 @@ export default function AssessmentForm({ initial, onSubmit, submitting, mode = '
     // bundled with.
     const [selectedClgIds, setSelectedClgIds] = useState([]);
     const [selectedCourseIds, setSelectedCourseIds] = useState([]);
+    // When on, the backend serves the question list in a per-student
+    // deterministic random order (seeded by userId + assessmentId).
+    const [shuffleQuestions, setShuffleQuestions] = useState(false);
 
     const [sets, setSets] = useState([]);
     const [setsLoading, setSetsLoading] = useState(true);
@@ -43,6 +46,7 @@ export default function AssessmentForm({ initial, onSubmit, submitting, mode = '
         setSelectedCourseIds(
             Array.isArray(initial.courseIds) ? initial.courseIds.map(String) : []
         );
+        setShuffleQuestions(!!initial.shuffleQuestions);
         // sequelize returns ISO; <input type="datetime-local"> wants YYYY-MM-DDTHH:mm.
         if (initial.startAt) {
             try {
@@ -82,8 +86,8 @@ export default function AssessmentForm({ initial, onSubmit, submitting, mode = '
         if (!assessmentId.trim()) return setError('Assessment ID is required');
         if (!TYPE_OPTIONS.includes(type)) return setError('Pick a type');
         if (!setId) return setError('Pick a question set');
-        if (selectedClgIds.length === 0) return setError('Pick at least one college');
         if (selectedCourseIds.length === 0) return setError('Pick at least one course');
+        if (selectedClgIds.length === 0) return setError('Pick at least one college');
 
         const minutes = Number(timerMinutes);
         if (!Number.isFinite(minutes) || minutes <= 0) return setError('Timer must be a positive number of minutes');
@@ -101,6 +105,7 @@ export default function AssessmentForm({ initial, onSubmit, submitting, mode = '
             startAt: startAt ? new Date(startAt).toISOString() : null,
             clgIds: selectedClgIds,
             courseIds: selectedCourseIds,
+            shuffleQuestions,
         });
     };
 
@@ -183,22 +188,41 @@ export default function AssessmentForm({ initial, onSubmit, submitting, mode = '
                 )}
             </div>
 
-            {/* Audience: which colleges/courses this assessment belongs to. */}
+            {/* Audience: pick the course(s) first, then the colleges where the
+                assessment runs. The College picker is narrowed to the
+                intersection of clg_ids across the selected courses. */}
             <div>
-                <CollegeMultiSelect
-                    value={selectedClgIds}
-                    onChange={setSelectedClgIds}
+                <CourseMultiSelect
+                    value={selectedCourseIds}
+                    onChange={setSelectedCourseIds}
                     required
                 />
             </div>
 
             <div>
-                <CourseMultiSelect
-                    value={selectedCourseIds}
-                    onChange={setSelectedCourseIds}
-                    clgIds={selectedClgIds}
+                <CollegeMultiSelect
+                    value={selectedClgIds}
+                    onChange={setSelectedClgIds}
+                    courseIds={selectedCourseIds}
                     required
                 />
+            </div>
+
+            <div>
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-skin"
+                        checked={shuffleQuestions}
+                        onChange={(e) => setShuffleQuestions(e.target.checked)}
+                    />
+                    <span className="text-[14px] text-dark">
+                        Shuffle questions for each student
+                    </span>
+                </label>
+                <p className="text-[11px] text-gray mt-1 ml-6">
+                    Each student sees questions in their own random order. The order stays the same for a given student across page refreshes.
+                </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

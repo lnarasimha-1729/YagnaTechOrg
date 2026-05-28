@@ -35,6 +35,13 @@ module.exports = (sequelize) => {
         // stored as strings or ints — both are accepted on read). Same shape
         // clg_ids uses. Allows a program to bundle multiple courses.
         course_ids: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
+        // Per-college course selection. JSON array of { courseId, clgId } so a
+        // course can be included for one college but not another even when both
+        // colleges offer it. course_ids stays populated with the DISTINCT union
+        // of courseId values here for back-compat (public catalog filter,
+        // legacy readers). When both are present, course_clg_pairs is the
+        // authoritative per-college mapping.
+        course_clg_pairs: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
         // Batches the program is scoped to. Same JSON-array shape as
         // course_ids / clg_ids — kept in sync with the selection in the
         // Add/Edit Program form's Batch picker (cascades off the selected
